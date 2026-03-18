@@ -14,8 +14,8 @@
             },
             "parameters": {
                 "detection-properties": {
-                    "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/deployment/Detection/model/yolo11n_openvino_model/yolo11n.xml",
-                    "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/deployment/Detection/model/yolo11n_openvino_model/model_proc.json",
+                     "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
+                    "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
                     "device": "CPU"
                 }
             }
@@ -36,8 +36,8 @@
             },
             "parameters": {
                 "detection-properties": {
-                    "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/deployment/Detection/model/yolo11n_openvino_model/yolo11n.xml",
-                    "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/deployment/Detection/model/yolo11n_openvino_model/model_proc.json",
+                     "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
+                    "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
                     "device": "GPU"
                 }
             }
