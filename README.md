@@ -1,136 +1,150 @@
 # Worker Safety Gear Detection
 
-A standalone application for detecting worker safety gear (hard hats and safety vests) using Intel's DLStreamer Pipeline Server.
-
 ## Overview
 
-This application detects whether workers are wearing required safety gear including:
-- Hard hats
-- Safety vests
+**Automated Worker Safety Compliance System** - This enterprise-grade application automatically monitors and enforces worker safety compliance by detecting the presence of required personal protective equipment (PPE) in real-time. Using advanced deep learning models, the system identifies workers not wearing mandatory safety gear, enabling immediate intervention and improving workplace safety culture.
 
-It uses deep learning models optimized for edge deployment on Intel hardware.
+**Required Software**:
 
-## Prerequisites
-
-- Docker and Docker Compose
-- NVIDIA/Intel GPU support (optional, but recommended)
-- At least 8GB RAM
-- Linux-based system
+- Docker 27.3.1 or higher
+- Python 3.10+
+- Git, jq, unzip
 
 ## Quick Start
 
 1. **Clone the repository**
    ```bash
-   git clone <your-new-repo-url>
-   cd worker-safety-gear-detection
+   git clone https://github.com/KlyffHanger/Inspeqtr-Safety.git
+   cd Inspeqtr-Safety
    ```
 
-2. **Configure environment variables**
+2. Set app specific environment variable file
+
    ```bash
-   # Edit .env file with your settings
-   nano .env
+   cp .env_worker_safety_gear_detection .env
    ```
-   Key variables to set:
-   - `HOST_IP`: Your machine's IP address
-   - `DOCKER_REGISTRY`: Docker registry if using private images
-   - `REST_SERVER_PORT`: Port for REST API (default: 8080)
 
 3. **Download artifacts (models and videos)**
    ```bash
-   bash apps/worker-safety-gear-detection/setup.sh
+   ./setup.sh
    ```
 
-4. **Start the application**
+## Deploy the Application
+
+1. Start the Docker application:
+
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
-5. **Access the application**
-   - REST API: `http://<HOST_IP>:8080`
-   - WebRTC Stream: `http://<HOST_IP>` (via nginx)
+2. Fetch the list of pipeline loaded available to launch
 
-## Architecture
+   ```bash
+   ./sample_list.sh
+   ```
 
-- **DLStreamer Pipeline Server**: Core inference engine
-- **MediaMTX**: WebRTC streaming server
-- **MQTT Broker**: Message broker for events
-- **Nginx**: Reverse proxy and static content serving
-- **Model Registry**: Manages ML models and versions
-- **MinIO**: S3-compatible object storage for models
+   This lists the pipeline loaded in DL Streamer Pipeline Server.
 
-## Configuration Files
+   Example Output:
 
-- `.env`: Environment variables
-- `apps/worker-safety-gear-detection/configs/`: Application-specific configs
-  - `pipeline-server-config.json`: Pipeline definitions
-  - `mosquitto.conf`: MQTT broker configuration
-  - `nginx/nginx.conf`: Web server configuration
+   ```bash
+   # Example output for Worker Safety gear detection
+   Environment variables loaded from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/.env
+   Running sample app: worker-safety-gear-detection
+   Checking status of dlstreamer-pipeline-server...
+   Server reachable. HTTP Status Code: 200
+   Loaded pipelines:
+   [
+       ...
+       {
+           "description": "DL Streamer Pipeline Server pipeline",
+           "name": "user_defined_pipelines",
+           "parameters": {
+           "properties": {
+               "detection-properties": {
+                   "element": {
+                       "format": "element-properties",
+                       "name": "detection"
+                   }
+               }
+           },
+           "type": "object"
+           },
+           "type": "GStreamer",
+           "version": "worker_safety_gear_detection"
+       }
+       ...
+   ]
+   ```
 
-## Deployment
 
-### Docker Compose (Development)
-```bash
-docker-compose up -d
-```
+3. Start the sample application with a pipeline.
+   ```bash
+   ./sample_start.sh -p worker_safety_gear_detection
+   ```
+   Output:
 
-### Kubernetes/Helm (Production)
-```bash
-helm install worker-safety helm/ -f helm/values_worker_safety_gear_detection.yaml
-```
+   ```text
+   # Example output for Worker Safety gear detection
+   Environment variables loaded from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/.env
+   Running sample app: worker-safety-gear-detection
+   Checking status of dlstreamer-pipeline-server...
+   Server reachable. HTTP Status Code: 200
+   Loading payload from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/apps/worker-safety-gear-detection/payload.json
+   Payload loaded successfully.
+   Starting pipeline: worker_safety_gear_detection
+   Launching pipeline: worker_safety_gear_detection
+   Extracting payload for pipeline: worker_safety_gear_detection
+   Found 1 payload(s) for pipeline: worker_safety_gear_detection
+   Payload for pipeline 'worker_safety_gear_detection' {"source":{"uri":"file:///home/pipeline-server/resources/videos/Safety_Full_Hat_and_Vest.avi","type":"uri"},"destination":{"frame":{"type":"webrtc","peer-id":"worker_safety"}},"parameters":{"detection-properties":{"model":"/home/pipeline-server/resources/models/worker-safety-gear-detection/deployment/Detection/model/model.xml","device":"CPU"}}}
+   Posting payload to REST server at https://<HOST_IP>/api/pipelines/user_defined_pipelines/worker_safety_gear_detection
+   Payload for pipeline 'worker_safety_gear_detection' posted successfully. Response: "784b87b45d1511f08ab0da88aa49c01e"
+   ```
 
-## API Usage
+   NOTE: This will start the pipeline. The inference stream can be viewed on WebRTC, in a browser, at the following url:
 
-### List Available Pipelines
-```bash
-curl -X GET http://localhost:8080/pipelines
-```
 
-### Start a Pipeline
-```bash
-curl -X POST http://localhost:8080/pipelines/worker_safety_gear_detection/start \
-  -H "Content-Type: application/json" \
-  -d @apps/worker-safety-gear-detection/payload.json
-```
+   ```sh
+   https://localhost/mediamtx/worker_safety/
+   ```
 
-### Stop a Pipeline
-```bash
-curl -X POST http://localhost:8080/pipelines/worker_safety_gear_detection/stop
-```
+   4. Get the status of running pipeline instance(s).
 
-## Logs and Monitoring
+   ```bash
+   ./sample_status.sh
+   ```
 
-View logs:
-```bash
-docker-compose logs -f dlstreamer-pipeline-server
-```
+   This command lists the statuses of pipeline instances launched during the lifetime of sample application.
 
-Access Prometheus metrics:
-- `http://<HOST_IP>:9999`
+   Output:
 
-## Troubleshooting
+   ```text
+   # Example output for Worker Safety gear detection
+   Environment variables loaded from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/.env
+   Running sample app: worker-safety-gear-detection
+   [
+   {
+       "avg_fps": 30.036955894826452,
+       "elapsed_time": 3.096184492111206,
+       "id": "784b87b45d1511f08ab0da88aa49c01e",
+       "message": "",
+       "start_time": 1752100724.3075056,
+       "state": "RUNNING"
+   }
+   ]
+   ```
 
-### Models not loading
-- Ensure artifacts are downloaded: `bash apps/worker-safety-gear-detection/setup.sh`
-- Check the `resources/` directory structure
+   5. Stop pipeline instances.
 
-### Connection issues
-- Verify `HOST_IP` in `.env` matches your machine's IP
-- Check firewall rules for required ports
+   ```bash
+   ./sample_stop.sh
+   ```
+   6. Stop the Docker application.
 
-### Performance issues
-- Enable GPU: Set device to "GPU" in pipeline parameters
-- Check available resources: `docker stats`
+   ```bash
+   docker compose down -v
+   ```
 
-## Documentation
+  
 
-- [Application README](apps/worker-safety-gear-detection/README.md)
-- [Release Notes](apps/worker-safety-gear-detection/RELEASE_NOTES.md)
-- [Docker Hub Info](apps/worker-safety-gear-detection/README_dockerhub.md)
 
-## License
-
-Refer to the original project license.
-
-## Support
-
-For issues and questions, contact the development team.
