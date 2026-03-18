@@ -108,7 +108,7 @@
    https://localhost/mediamtx/worker_safety/
    ```
 
-   4. Get the status of running pipeline instance(s).
+4. Get the status of running pipeline instance(s).
 
    ```bash
    ./sample_status.sh
@@ -134,12 +134,12 @@
    ]
    ```
 
-   5. Stop pipeline instances.
+5. Stop pipeline instances.
 
    ```bash
    ./sample_stop.sh
    ```
-   6. Stop the Docker application.
+6. Stop the Docker application.
 
    ```bash
    docker compose down -v
