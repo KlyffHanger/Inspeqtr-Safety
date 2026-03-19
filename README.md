@@ -24,9 +24,23 @@
    cp .env_worker_safety_gear_detection .env
    ```
 
-3. **Download artifacts (models and videos)**
+3. **Generate local SSL certificates for Nginx**
    ```bash
    ./setup.sh
+   ```
+
+4. **Add or change videos**
+
+
+   Update the video path in:
+   - `apps/worker-safety-gear-detection/payload.json`
+
+   Example (set the `source.uri` to your file):
+   ```json
+   "source": {
+     "uri": "file:///home/pipeline-server/resources/videos/worker02.avi",
+     "type": "uri"
+   }
    ```
 
 ## Deploy the Application
@@ -146,5 +160,4 @@
    ```
 
   
-
 
