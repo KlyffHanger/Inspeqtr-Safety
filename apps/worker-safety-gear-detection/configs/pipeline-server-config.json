@@ -55,7 +55,7 @@
                 },
                 "S3_write": {
                     "bucket": "ecgdemo",
-                    "folder_prefix": "camera1",
+                    "folder_prefix": "worker-safety-cam-1",
                     "block": "false"
                 },
                 "auto_start": false

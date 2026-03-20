@@ -239,6 +239,30 @@ services:
       - tb_postgres
     networks:
       - mraas
+
+  tb-gateway:
+    restart: always
+    image: "thingsboard/tb-gateway:latest"
+    container_name: tb-gateway
+    environment:
+      TB_GW_HOST: thingsboard-ce
+      TB_GW_PORT: 1883
+      TB_GW_ACCESS_TOKEN: ${TB_GW_ACCESS_TOKEN}
+      TB_REST_BASE_URL: http://thingsboard-ce:8080
+      TB_REST_USERNAME: ${TB_REST_USERNAME}
+      TB_REST_PASSWORD: ${TB_REST_PASSWORD}
+    depends_on:
+      - thingsboard-ce
+      - mqtt-broker
+    volumes:
+      - ./apps/${SAMPLE_APP}/configs/thingsboard-gateway/config/tb_gateway.json:/thingsboard_gateway/config/tb_gateway.json:ro
+      - ./apps/${SAMPLE_APP}/configs/thingsboard-gateway/config/mqtt.json:/thingsboard_gateway/config/mqtt.json:ro
+      - ./apps/${SAMPLE_APP}/configs/thingsboard-gateway/extensions/mqtt/custom_mqtt_uplink_converter.py:/thingsboard_gateway/extensions/mqtt/custom_mqtt_uplink_converter.py:ro
+      - ./apps/${SAMPLE_APP}/data/alarm-frames:/thingsboard_gateway/frames
+      - tb_gateway_logs:/thingsboard_gateway/logs
+    networks:
+      - mraas
+
   mraas-minio:
     image: minio/minio:RELEASE.2020-12-12T08-39-07Z
     container_name: ${MR_MINIO_HOSTNAME}
@@ -312,4 +336,6 @@ volumes:
   tb_postgres_data:
     driver: local
   prometheus_data:
+    driver: local
+  tb_gateway_logs:
     driver: local

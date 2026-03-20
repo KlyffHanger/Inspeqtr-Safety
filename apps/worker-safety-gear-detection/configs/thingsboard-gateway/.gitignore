@@ -1,0 +1,8 @@
+*
+!.gitignore
+!config/
+!config/mqtt.json
+!config/tb_gateway.json
+!extensions/
+!extensions/mqtt/
+!extensions/mqtt/custom_mqtt_uplink_converter.py
