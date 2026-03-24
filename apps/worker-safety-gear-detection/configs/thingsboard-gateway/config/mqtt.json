@@ -31,8 +31,11 @@
         "extensionConfig": {
           "deviceName": "worker-safety-cam-1",
           "deviceProfile": "default",
+          "cameraLabel": "Worker Safety Camera 1",
+          "dashboardBaseUrl": "https://localhost",
+          "liveStreamPath": "/mediamtx/worker_safety/",
           "framesDirectory": "/thingsboard_gateway/frames",
-          "framesReferencePrefix": "apps/worker-safety-gear-detection/data/alarm-frames",
+          "framesReferencePrefix": "/alarm-frames",
           "labels": [
             "NO-Hardhat",
             "NO-Mask",

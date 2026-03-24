@@ -33,6 +33,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         self._state_by_device = {}
         self._alarm_state_by_device = {}
         self._device_id_cache = {}
+        self._frame_cache = {}  # Cache frame references by (device_name, frame_id)
         self._http_lock = threading.Lock()
         self._tb_rest_base_url = os.getenv("TB_REST_BASE_URL", "http://thingsboard-ce:8080").rstrip("/")
         self._tb_rest_username = os.getenv("TB_REST_USERNAME", "tenant@thingsboard.org")
@@ -51,22 +52,36 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             send_clear_event = bool(extension_config.get("sendClearEvent", True))
             frames_directory = extension_config.get("framesDirectory", "/thingsboard_gateway/frames")
             frames_reference_prefix = extension_config.get("framesReferencePrefix", "alarm-frames")
+            dashboard_base_url = (extension_config.get("dashboardBaseUrl") or "").rstrip("/")
+            live_stream_path = extension_config.get("liveStreamPath") or "/mediamtx/worker_safety/"
+            camera_label = extension_config.get("cameraLabel") or device_name
 
             metadata = payload.get("metadata") or {}
             labels = self._extract_labels(metadata)
             monitored_hits = sorted(label for label in labels if label in monitored_labels)
             unique_labels = sorted(set(labels))
             timestamp_ms = self._get_timestamp_ms(metadata)
+            frame_id = metadata.get("frame_id")
             frame_reference = None
+            
+            # Save frame once per unique frame_id, cache the reference
             if monitored_hits:
-                frame_reference = self._save_frame_reference(
-                    device_name=device_name,
-                    timestamp_ms=timestamp_ms,
-                    metadata=metadata,
-                    blob=payload.get("blob"),
-                    frames_directory=frames_directory,
-                    frames_reference_prefix=frames_reference_prefix,
-                )
+                cache_key = (device_name, frame_id)
+                if cache_key not in self._frame_cache:
+                    frame_reference = self._save_frame_reference(
+                        device_name=device_name,
+                        timestamp_ms=timestamp_ms,
+                        metadata=metadata,
+                        blob=payload.get("blob"),
+                        frames_directory=frames_directory,
+                        frames_reference_prefix=frames_reference_prefix,
+                    )
+                    if frame_reference:
+                        self._frame_cache[cache_key] = frame_reference
+                        self._log.debug("Cached frame: device=%s, frame_id=%s, ref=%s", device_name, frame_id, frame_reference)
+                else:
+                    frame_reference = self._frame_cache[cache_key]
+                    self._log.debug("Using cached frame: device=%s, frame_id=%s", device_name, frame_id)
 
             previous_state = self._state_by_device.get(device_name, {"labels": tuple(), "last_sent_ts": 0})
             current_state = tuple(monitored_hits)
@@ -85,6 +100,9 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                         monitored_hits=[],
                         event_type="cleared",
                         frame_reference=None,
+                        frame_url=None,
+                        live_stream_url=self._build_public_url(dashboard_base_url, live_stream_path),
+                        camera_label=camera_label,
                     )
                 return None
 
@@ -92,6 +110,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                 return None
 
             self._state_by_device[device_name] = {"labels": current_state, "last_sent_ts": timestamp_ms or previous_state.get("last_sent_ts", 0)}
+            frame_url = self._build_public_url(dashboard_base_url, frame_reference) if frame_reference else None
             return self._build_message(
                 device_name=device_name,
                 device_profile=device_profile,
@@ -103,15 +122,18 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                 monitored_hits=monitored_hits,
                 event_type="raised",
                 frame_reference=frame_reference,
+                frame_url=frame_url,
+                live_stream_url=self._build_public_url(dashboard_base_url, live_stream_path),
+                camera_label=camera_label,
             )
         except Exception:
             self._log.exception("Failed to convert MQTT message from topic %s", topic)
             return None
 
-    def _build_message(self, device_name, device_profile, timestamp_ms, topic, metadata, monitored_labels, unique_labels, monitored_hits, event_type, frame_reference):
+    def _build_message(self, device_name, device_profile, timestamp_ms, topic, metadata, monitored_labels, unique_labels, monitored_hits, event_type, frame_reference, frame_url, live_stream_url, camera_label):
         converted = ConvertedData(device_name=device_name, device_type=device_profile)
         label_counts = {label: monitored_hits.count(label) for label in monitored_labels}
-        self._sync_alarms(device_name, timestamp_ms, metadata, label_counts, frame_reference)
+        self._sync_alarms(device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label)
 
         telemetry = {
             "ppe_violation": bool(monitored_hits),
@@ -120,9 +142,15 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             "ppe_violation_labels": json.dumps(monitored_hits),
             "detected_labels": json.dumps(unique_labels),
             "frame_id": metadata.get("frame_id"),
+            "camera_name": camera_label,
+            "live_stream_url": live_stream_url,
         }
         if frame_reference:
             telemetry["frame_reference"] = frame_reference
+        if frame_url:
+            telemetry["frame_url"] = frame_url
+            telemetry["image_url"] = frame_url
+            telemetry["snapshot_url"] = frame_url
 
         for label in monitored_labels:
             count = label_counts[label]
@@ -141,6 +169,8 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                 "pipeline_name": (metadata.get("pipeline") or {}).get("name"),
                 "pipeline_version": (metadata.get("pipeline") or {}).get("version"),
                 "monitored_labels": json.dumps(monitored_labels),
+                "camera_name": camera_label,
+                "live_stream_url": live_stream_url,
             }
         )
         return converted
@@ -152,7 +182,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             body = body.decode("utf-8")
         return json.loads(body)
 
-    def _sync_alarms(self, device_name, timestamp_ms, metadata, label_counts, frame_reference):
+    def _sync_alarms(self, device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label):
         active_alarm_ids = self._alarm_state_by_device.setdefault(device_name, {})
         device_id = self._get_device_id(device_name)
         if not device_id:
@@ -166,13 +196,40 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                 continue
 
             if count > 0:
-                alarm_id = self._create_or_update_alarm(device_id, alarm_type, label, count, event_ts, metadata, frame_reference)
-                if alarm_id:
-                    active_alarm_ids[label] = alarm_id
-            else:
+                # Check if alarm already exists for this label
                 alarm_id = active_alarm_ids.get(label)
-                if alarm_id and self._clear_alarm(alarm_id):
-                    active_alarm_ids.pop(label, None)
+                
+                if alarm_id:
+                    # Alarm exists - UPDATE it with new frame evidence (no duplicate alarms)
+                    self._update_alarm_with_frame(
+                        alarm_id,
+                        device_id,
+                        alarm_type,
+                        label,
+                        count,
+                        event_ts,
+                        metadata,
+                        frame_reference,
+                        frame_url,
+                        live_stream_url,
+                        camera_label,
+                    )
+                else:
+                    # Alarm doesn't exist - CREATE new one
+                    alarm_id = self._create_or_update_alarm(
+                        device_id,
+                        alarm_type,
+                        label,
+                        count,
+                        event_ts,
+                        metadata,
+                        frame_reference,
+                        frame_url,
+                        live_stream_url,
+                        camera_label,
+                    )
+                    if alarm_id:
+                        active_alarm_ids[label] = alarm_id
 
     def _get_device_id(self, device_name):
         cached = self._device_id_cache.get(device_name)
@@ -189,15 +246,21 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         self._device_id_cache[device_name] = device_id
         return device_id
 
-    def _create_or_update_alarm(self, device_id, alarm_type, label, count, event_ts, metadata, frame_reference):
+    def _create_or_update_alarm(self, device_id, alarm_type, label, count, event_ts, metadata, frame_reference, frame_url, live_stream_url, camera_label):
         details = {
             "label": label,
             "count": count,
             "frame_id": metadata.get("frame_id"),
             "detected_labels": self._extract_labels(metadata),
+            "camera_name": camera_label,
+            "live_stream_url": live_stream_url,
         }
         if frame_reference:
             details["frame_reference"] = frame_reference
+        if frame_url:
+            details["frame_url"] = frame_url
+            details["image_url"] = frame_url
+            details["snapshot_url"] = frame_url
 
         payload = {
             "type": alarm_type,
@@ -224,6 +287,38 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         response = self._tb_request("POST", f"/api/alarm/{alarm_id}/clear")
         return bool(response and response.get("cleared") is True)
 
+    def _update_alarm_with_frame(self, alarm_id, device_id, alarm_type, label, count, event_ts, metadata, frame_reference, frame_url, live_stream_url, camera_label):
+        """
+        Update an existing alarm by adding new frame evidence without creating duplicate alarms.
+        Just updates the latest frame and timestamp, keeping the same alarm active.
+        """
+        details = {
+            "label": label,
+            "count": count,
+            "frame_id": metadata.get("frame_id"),
+            "detected_labels": self._extract_labels(metadata),
+            "camera_name": camera_label,
+            "live_stream_url": live_stream_url,
+        }
+        if frame_reference:
+            details["frame_reference"] = frame_reference
+        if frame_url:
+            details["frame_url"] = frame_url
+            details["image_url"] = frame_url
+            details["snapshot_url"] = frame_url
+
+        # Update the alarm's endTs to reflect latest activity
+        # Keep it ACTIVE, don't create new alarm
+        payload = {
+            "endTs": event_ts,
+            "details": details,
+        }
+        
+        response = self._tb_request("PUT", f"/api/alarm/{alarm_id}", payload)
+        if response:
+            self._log.debug("Updated alarm %s with new frame evidence: label=%s, frame_id=%s", alarm_id, label, metadata.get("frame_id"))
+        return alarm_id
+
     def _save_frame_reference(self, device_name, timestamp_ms, metadata, blob, frames_directory, frames_reference_prefix):
         image_bytes = self._decode_blob(blob)
         if not image_bytes:
@@ -232,17 +327,35 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         frame_ts = timestamp_ms or int(time.time() * 1000)
         safe_device_name = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip("-") or "device"
         frame_id = metadata.get("frame_id")
-        filename_parts = [str(frame_ts)]
+        
+        # Build unique filename based on frame_id (primary) or timestamp + uuid (fallback)
         if frame_id is not None:
-            filename_parts.append(f"frame-{frame_id}")
-        filename = "_".join(filename_parts) + ".jpg"
+            filename = f"frame-{frame_id}.jpg"
+        else:
+            import uuid
+            unique_suffix = str(uuid.uuid4())[:8]
+            filename = f"{frame_ts}_{unique_suffix}.jpg"
 
         device_directory = os.path.join(frames_directory, safe_device_name)
         os.makedirs(device_directory, exist_ok=True)
 
         file_path = os.path.join(device_directory, filename)
-        with open(file_path, "wb") as frame_file:
-            frame_file.write(image_bytes)
+        # Only write if file doesn't exist (avoid overwriting)
+        if not os.path.exists(file_path):
+            with open(file_path, "wb") as frame_file:
+                frame_file.write(image_bytes)
+        
+        # Keep cache size manageable (last 1000 frames per device)
+        try:
+            cache_key_prefix = device_name
+            cache_keys = [k for k in self._frame_cache.keys() if k and len(k) > 0 and k[0] == cache_key_prefix]
+            if len(cache_keys) > 1000:
+                # Remove oldest entries (keep newest 1000)
+                for old_key in sorted(cache_keys)[:-1000]:
+                    if old_key in self._frame_cache:
+                        del self._frame_cache[old_key]
+        except Exception as e:
+            self._log.warning("Error managing frame cache: %s", str(e))
 
         return "/".join(
             [
@@ -370,3 +483,11 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
     def _event_key(self, label):
         slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
         return f"{slug}_event"
+
+    def _build_public_url(self, base_url, path):
+        if not path:
+            return None
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        return f"{base_url}{normalized_path}" if base_url else normalized_path
