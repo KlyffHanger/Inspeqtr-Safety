@@ -41,7 +41,6 @@
             "NO-Mask",
             "NO-Safety Vest"
           ],
-          "alertIntervalMs": 10000,
           "sendClearEvent": true
         }
       }

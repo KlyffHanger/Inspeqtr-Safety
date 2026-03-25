@@ -31,9 +31,9 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         self._log = logger
         self._config = config.get("converter", config)
         self._state_by_device = {}
-        self._alarm_state_by_device = {}
         self._device_id_cache = {}
         self._frame_cache = {}  # Cache frame references by (device_name, frame_id)
+        self._alarm_state = {}  # Track (device_id, person_id, label) combos that have active alarms
         self._http_lock = threading.Lock()
         self._tb_rest_base_url = os.getenv("TB_REST_BASE_URL", "http://thingsboard-ce:8080").rstrip("/")
         self._tb_rest_username = os.getenv("TB_REST_USERNAME", "tenant@thingsboard.org")
@@ -48,7 +48,6 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             device_name = extension_config.get("deviceName") or self._config.get("deviceInfo", {}).get("deviceNameExpression") or topic.split("/")[-1]
             device_profile = extension_config.get("deviceProfile") or self._config.get("deviceInfo", {}).get("deviceProfileExpression") or "default"
             monitored_labels = extension_config.get("labels") or []
-            alert_interval_ms = int(extension_config.get("alertIntervalMs", 10000))
             send_clear_event = bool(extension_config.get("sendClearEvent", True))
             frames_directory = extension_config.get("framesDirectory", "/thingsboard_gateway/frames")
             frames_reference_prefix = extension_config.get("framesReferencePrefix", "alarm-frames")
@@ -57,9 +56,9 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             camera_label = extension_config.get("cameraLabel") or device_name
 
             metadata = payload.get("metadata") or {}
-            labels = self._extract_labels(metadata)
-            monitored_hits = sorted(label for label in labels if label in monitored_labels)
-            unique_labels = sorted(set(labels))
+            labels = self._extract_labels(metadata) or []
+            monitored_hits = sorted(label for label in labels if label in monitored_labels) if labels else []
+            unique_labels = sorted(set(labels)) if labels else []
             timestamp_ms = self._get_timestamp_ms(metadata)
             frame_id = metadata.get("frame_id")
             frame_reference = None
@@ -88,6 +87,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
 
             if not monitored_hits:
                 self._state_by_device[device_name] = {"labels": tuple(), "last_sent_ts": previous_state.get("last_sent_ts", 0)}
+                
                 if send_clear_event and previous_state.get("labels"):
                     return self._build_message(
                         device_name=device_name,
@@ -106,9 +106,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                     )
                 return None
 
-            if previous_state.get("labels") == current_state and timestamp_ms and timestamp_ms - previous_state.get("last_sent_ts", 0) < alert_interval_ms:
-                return None
-
+            # Send alert for every new violation detected
             self._state_by_device[device_name] = {"labels": current_state, "last_sent_ts": timestamp_ms or previous_state.get("last_sent_ts", 0)}
             frame_url = self._build_public_url(dashboard_base_url, frame_reference) if frame_reference else None
             return self._build_message(
@@ -126,21 +124,23 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                 live_stream_url=self._build_public_url(dashboard_base_url, live_stream_path),
                 camera_label=camera_label,
             )
-        except Exception:
-            self._log.exception("Failed to convert MQTT message from topic %s", topic)
+        except Exception as e:
+            self._log.exception("Failed to convert MQTT message from topic %s: %s", topic, str(e))
             return None
 
     def _build_message(self, device_name, device_profile, timestamp_ms, topic, metadata, monitored_labels, unique_labels, monitored_hits, event_type, frame_reference, frame_url, live_stream_url, camera_label):
         converted = ConvertedData(device_name=device_name, device_type=device_profile)
+        monitored_hits = monitored_hits or []
+        unique_labels = unique_labels or []
         label_counts = {label: monitored_hits.count(label) for label in monitored_labels}
         self._sync_alarms(device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label)
 
         telemetry = {
             "ppe_violation": bool(monitored_hits),
             "ppe_violation_event": event_type,
-            "ppe_violation_count": len(monitored_hits),
-            "ppe_violation_labels": json.dumps(monitored_hits),
-            "detected_labels": json.dumps(unique_labels),
+            "ppe_violation_count": len(monitored_hits or []),
+            "ppe_violation_labels": json.dumps(monitored_hits or []),
+            "detected_labels": json.dumps(unique_labels or []),
             "frame_id": metadata.get("frame_id"),
             "camera_name": camera_label,
             "live_stream_url": live_stream_url,
@@ -183,53 +183,49 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         return json.loads(body)
 
     def _sync_alarms(self, device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label):
-        active_alarm_ids = self._alarm_state_by_device.setdefault(device_name, {})
         device_id = self._get_device_id(device_name)
         if not device_id:
             return
 
         event_ts = timestamp_ms or int(time.time() * 1000)
-
-        for label, count in label_counts.items():
+        
+        # Extract all persons with their violations from metadata
+        persons_violations = self._extract_persons_with_violations(metadata, label_counts)
+        
+        # If no persons with violations, return
+        if not persons_violations:
+            return
+        
+        # Process each person + violation combination
+        for person_id, label in persons_violations:
             alarm_type = self.ALARM_TYPE_BY_LABEL.get(label)
             if not alarm_type:
                 continue
-
-            if count > 0:
-                # Check if alarm already exists for this label
-                alarm_id = active_alarm_ids.get(label)
+            
+            # Create a key for this person+violation combination
+            alarm_key = (device_id, person_id, label)
+            
+            # Only create a NEW alarm if this is the first time we're seeing this person+violation combo
+            if alarm_key not in self._alarm_state:
+                self._log.info("Creating alarm for person %s with violation: %s", person_id, label)
+                self._alarm_state[alarm_key] = True
                 
-                if alarm_id:
-                    # Alarm exists - UPDATE it with new frame evidence (no duplicate alarms)
-                    self._update_alarm_with_frame(
-                        alarm_id,
-                        device_id,
-                        alarm_type,
-                        label,
-                        count,
-                        event_ts,
-                        metadata,
-                        frame_reference,
-                        frame_url,
-                        live_stream_url,
-                        camera_label,
-                    )
-                else:
-                    # Alarm doesn't exist - CREATE new one
-                    alarm_id = self._create_or_update_alarm(
-                        device_id,
-                        alarm_type,
-                        label,
-                        count,
-                        event_ts,
-                        metadata,
-                        frame_reference,
-                        frame_url,
-                        live_stream_url,
-                        camera_label,
-                    )
-                    if alarm_id:
-                        active_alarm_ids[label] = alarm_id
+                # Include person_id in alarm type to make each person+violation unique in ThingsBoard
+                unique_alarm_type = f"{alarm_type} ({person_id})"
+                
+                # CREATE new alarm for this person+violation combination
+                self._create_or_update_alarm(
+                    device_id,
+                    unique_alarm_type,
+                    label,
+                    person_id,
+                    event_ts,
+                    metadata,
+                    frame_reference,
+                    frame_url,
+                    live_stream_url,
+                    camera_label,
+            )
 
     def _get_device_id(self, device_name):
         cached = self._device_id_cache.get(device_name)
@@ -246,12 +242,12 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         self._device_id_cache[device_name] = device_id
         return device_id
 
-    def _create_or_update_alarm(self, device_id, alarm_type, label, count, event_ts, metadata, frame_reference, frame_url, live_stream_url, camera_label):
+    def _create_or_update_alarm(self, device_id, alarm_type, label, person_id, event_ts, metadata, frame_reference, frame_url, live_stream_url, camera_label):
         details = {
             "label": label,
-            "count": count,
+            "person_id": person_id,
             "frame_id": metadata.get("frame_id"),
-            "detected_labels": self._extract_labels(metadata),
+            "detected_labels": self._extract_labels(metadata) or [],
             "camera_name": camera_label,
             "live_stream_url": live_stream_url,
         }
@@ -287,38 +283,48 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         response = self._tb_request("POST", f"/api/alarm/{alarm_id}/clear")
         return bool(response and response.get("cleared") is True)
 
-    def _update_alarm_with_frame(self, alarm_id, device_id, alarm_type, label, count, event_ts, metadata, frame_reference, frame_url, live_stream_url, camera_label):
+    def _extract_persons_with_violations(self, metadata, label_counts):
         """
-        Update an existing alarm by adding new frame evidence without creating duplicate alarms.
-        Just updates the latest frame and timestamp, keeping the same alarm active.
+        Extract list of (person_id, label) tuples for all persons with violations.
+        If person ID is not available, use frame_id + object_index as unique identifier.
         """
-        details = {
-            "label": label,
-            "count": count,
-            "frame_id": metadata.get("frame_id"),
-            "detected_labels": self._extract_labels(metadata),
-            "camera_name": camera_label,
-            "live_stream_url": live_stream_url,
-        }
-        if frame_reference:
-            details["frame_reference"] = frame_reference
-        if frame_url:
-            details["frame_url"] = frame_url
-            details["image_url"] = frame_url
-            details["snapshot_url"] = frame_url
-
-        # Update the alarm's endTs to reflect latest activity
-        # Keep it ACTIVE, don't create new alarm
-        payload = {
-            "endTs": event_ts,
-            "details": details,
-        }
+        persons_violations = []
         
-        response = self._tb_request("PUT", f"/api/alarm/{alarm_id}", payload)
-        if response:
-            self._log.debug("Updated alarm %s with new frame evidence: label=%s, frame_id=%s", alarm_id, label, metadata.get("frame_id"))
-        return alarm_id
-
+        try:
+            # Try to extract from gva_meta (Intel GVA format)
+            for obj_idx, obj in enumerate(metadata.get("gva_meta") or []):
+                if not obj:
+                    continue
+                person_id = obj.get("object_id") or f"person_{obj_idx}"
+                detected_labels = []
+                
+                for tensor in obj.get("tensor") or []:
+                    if tensor:
+                        label = tensor.get("label")
+                        if label and label in label_counts:
+                            detected_labels.append(label)
+                
+                for label in detected_labels:
+                    persons_violations.append((person_id, label))
+        except Exception as e:
+            self._log.warning("Error extracting persons from gva_meta: %s", str(e))
+        
+        # If no persons extracted from gva_meta, try objects field
+        if not persons_violations:
+            try:
+                for obj_idx, obj in enumerate(metadata.get("objects") or []):
+                    if not obj:
+                        continue
+                    person_id = obj.get("id") or obj.get("object_id") or f"person_{obj_idx}"
+                    detection = obj.get("detection") or {}
+                    label = detection.get("label")
+                    
+                    if label and label in label_counts:
+                        persons_violations.append((person_id, label))
+            except Exception as e:
+                self._log.warning("Error extracting persons from objects: %s", str(e))
+        
+        return persons_violations
     def _save_frame_reference(self, device_name, timestamp_ms, metadata, blob, frames_directory, frames_reference_prefix):
         image_bytes = self._decode_blob(blob)
         if not image_bytes:
