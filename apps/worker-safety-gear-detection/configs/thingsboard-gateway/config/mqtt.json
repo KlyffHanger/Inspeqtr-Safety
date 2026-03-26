@@ -1,0 +1,51 @@
+{
+  "broker": {
+    "host": "mqtt-broker",
+    "port": 1883,
+    "clientId": "tb-gateway-mqtt",
+    "version": 5,
+    "maxMessageNumberPerWorker": 10,
+    "maxNumberOfWorkers": 100,
+    "keepAlive": 60,
+    "cleanSession": true,
+    "cleanStart": true,
+    "sessionExpiryInterval": 0,
+    "security": {
+      "type": "anonymous"
+    }
+  },
+  "mapping": [
+    {
+      "topicFilter": "worker_safety_gear_detection",
+      "subscriptionQos": 1,
+      "converter": {
+        "type": "custom",
+        "deviceInfo": {
+          "deviceNameExpressionSource": "constant",
+          "deviceNameExpression": "worker-safety-cam-1",
+          "deviceProfileExpressionSource": "constant",
+          "deviceProfileExpression": "default"
+        },
+        "extension": "CustomMqttUplinkConverter",
+        "cached": true,
+        "extensionConfig": {
+          "deviceName": "worker-safety-cam-1",
+          "deviceProfile": "default",
+          "cameraLabel": "Worker Safety Camera 1",
+          "dashboardBaseUrl": "https://localhost",
+          "liveStreamPath": "/mediamtx/worker_safety/",
+          "framesDirectory": "/thingsboard_gateway/frames",
+          "framesReferencePrefix": "/alarm-frames",
+          "labels": [
+            "NO-Hardhat",
+            "NO-Mask",
+            "NO-Safety Vest"
+          ],
+          "sendClearEvent": true
+        }
+      }
+    }
+  ],
+  "requestsMapping": {},
+  "id": "a68e681a-a99e-40eb-95da-31d4d87ee684"
+}
