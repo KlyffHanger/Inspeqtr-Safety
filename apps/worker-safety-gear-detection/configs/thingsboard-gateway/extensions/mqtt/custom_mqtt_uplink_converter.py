@@ -1,5 +1,6 @@
 import base64
 import binascii
+import datetime
 import json
 import os
 import re
@@ -13,6 +14,89 @@ from thingsboard_gateway.connectors.mqtt.mqtt_uplink_converter import MqttUplink
 from thingsboard_gateway.gateway.entities.converted_data import ConvertedData
 from thingsboard_gateway.gateway.entities.telemetry_entry import TelemetryEntry
 
+
+# ─── WindowedAlarmCounter ─────────────────────────────────────────────────────
+
+def _day_key(dt: datetime.date) -> str:
+    return dt.strftime("%Y-%m-%d")
+
+
+def _week_key(dt: datetime.date) -> str:
+    return dt.strftime("%G-W%V")
+
+
+def _year_key(dt: datetime.date) -> str:
+    return str(dt.year)
+
+
+class WindowedAlarmCounter:
+    """
+    In-memory per-device alarm counts for three rolling time windows:
+      - today     resets at midnight (calendar day)
+      - last_7d   resets when the ISO week changes (Mon–Sun)
+      - ytd       resets on 1 Jan
+
+    Resets are lazy: they happen on the next increment/snapshot call
+    after the boundary passes — no background thread required.
+
+    Emitted telemetry keys:
+      alarm_major_today      alarm_critical_today
+      alarm_major_last_7d    alarm_critical_last_7d
+      alarm_major_ytd        alarm_critical_ytd
+    """
+
+    SEVERITIES = ("MAJOR", "CRITICAL")
+
+    def __init__(self) -> None:
+        self._buckets: dict = {}
+
+    def increment(self, device_name: str, severity: str, event_ts_ms: int) -> None:
+        if severity not in self.SEVERITIES:
+            return
+        ts_s = (event_ts_ms or 0) / 1000.0
+        event_date = datetime.date.fromtimestamp(ts_s) if ts_s > 0 else datetime.date.today()
+        device_buckets = self._ensure_device(device_name)
+        self._maybe_reset(device_buckets, event_date)
+        device_buckets["today"][severity] += 1
+        device_buckets["last_7d"][severity] += 1
+        device_buckets["ytd"][severity] += 1
+
+    def snapshot(self, device_name: str) -> dict:
+        device_buckets = self._ensure_device(device_name)
+        self._maybe_reset(device_buckets, datetime.date.today())
+        b = device_buckets
+        return {
+            "alarm_major_today":      b["today"]["MAJOR"],
+            "alarm_critical_today":   b["today"]["CRITICAL"],
+            "alarm_major_last_7d":    b["last_7d"]["MAJOR"],
+            "alarm_critical_last_7d": b["last_7d"]["CRITICAL"],
+            "alarm_major_ytd":        b["ytd"]["MAJOR"],
+            "alarm_critical_ytd":     b["ytd"]["CRITICAL"],
+        }
+
+    def _ensure_device(self, device_name: str) -> dict:
+        if device_name not in self._buckets:
+            today = datetime.date.today()
+            self._buckets[device_name] = {
+                "today":  {"key": _day_key(today),  "MAJOR": 0, "CRITICAL": 0},
+                "last_7d": {"key": _week_key(today), "MAJOR": 0, "CRITICAL": 0},
+                "ytd":    {"key": _year_key(today),  "MAJOR": 0, "CRITICAL": 0},
+            }
+        return self._buckets[device_name]
+
+    def _maybe_reset(self, device_buckets: dict, ref_date: datetime.date) -> None:
+        day_k  = _day_key(ref_date)
+        week_k = _week_key(ref_date)
+        year_k = _year_key(ref_date)
+        if device_buckets["today"]["key"] != day_k:
+            device_buckets["today"] = {"key": day_k, "MAJOR": 0, "CRITICAL": 0}
+        if device_buckets["last_7d"]["key"] != week_k:
+            device_buckets["last_7d"] = {"key": week_k, "MAJOR": 0, "CRITICAL": 0}
+        if device_buckets["ytd"]["key"] != year_k:
+            device_buckets["ytd"] = {"key": year_k, "MAJOR": 0, "CRITICAL": 0}
+
+
+# ─── CustomMqttUplinkConverter ────────────────────────────────────────────────
 
 class CustomMqttUplinkConverter(MqttUplinkConverter):
     ALARM_TYPE_BY_LABEL = {
@@ -32,14 +116,27 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         self._config = config.get("converter", config)
         self._state_by_device = {}
         self._device_id_cache = {}
-        self._frame_cache = {}  # Cache frame references by (device_name, frame_id)
-        self._alarm_state = {}  # Track (device_id, person_id, label) combos that have active alarms
+        self._frame_cache = {}
+        self._last_alarm_time = {}
+        self._alarm_throttle_seconds = 5
         self._http_lock = threading.Lock()
-        self._tb_rest_base_url = os.getenv("TB_REST_BASE_URL", "http://thingsboard-ce:8080").rstrip("/")
-        self._tb_rest_username = os.getenv("TB_REST_USERNAME", "tenant@thingsboard.org")
-        self._tb_rest_password = os.getenv("TB_REST_PASSWORD", "tenant")
+        self._tb_rest_base_url = os.getenv("TB_REST_BASE_URL")
+        self._tb_rest_username = os.getenv("TB_REST_USERNAME")
+        self._tb_rest_password = os.getenv("TB_REST_PASSWORD")
         self._tb_jwt = None
         self._tb_jwt_expiry = 0
+        self._violation_totals_by_device = {}
+        self._windowed_counters = WindowedAlarmCounter()  # NEW
+        # Lifetime alarm counts fetched directly from ThingsBoard — never drift
+        self._lifetime_counts_cache = {}       # device_name → {"MAJOR": n, "CRITICAL": n}
+        self._lifetime_counts_last_fetch = {}  # device_name → timestamp (s)
+        self._lifetime_counts_ttl = 30         # re-fetch at most every 30 s
+        # Active / unacknowledged alarm stats + avg response time
+        self._active_stats_cache = {}          # device_name → dict
+        self._active_stats_last_fetch = {}     # device_name → timestamp (s)
+        self._active_stats_ttl = 15            # re-fetch every 15 s
+        # Days-since-last-alarm tracking
+        self._last_alarm_wall_ts = {}          # device_name → wall-clock s of last fired alarm
 
     def convert(self, topic, body):
         try:
@@ -62,8 +159,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             timestamp_ms = self._get_timestamp_ms(metadata)
             frame_id = metadata.get("frame_id")
             frame_reference = None
-            
-            # Save frame once per unique frame_id, cache the reference
+
             if monitored_hits:
                 cache_key = (device_name, frame_id)
                 if cache_key not in self._frame_cache:
@@ -87,7 +183,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
 
             if not monitored_hits:
                 self._state_by_device[device_name] = {"labels": tuple(), "last_sent_ts": previous_state.get("last_sent_ts", 0)}
-                
+
                 if send_clear_event and previous_state.get("labels"):
                     return self._build_message(
                         device_name=device_name,
@@ -106,7 +202,6 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                     )
                 return None
 
-            # Send alert for every new violation detected
             self._state_by_device[device_name] = {"labels": current_state, "last_sent_ts": timestamp_ms or previous_state.get("last_sent_ts", 0)}
             frame_url = self._build_public_url(dashboard_base_url, frame_reference) if frame_reference else None
             return self._build_message(
@@ -133,12 +228,38 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         monitored_hits = monitored_hits or []
         unique_labels = unique_labels or []
         label_counts = {label: monitored_hits.count(label) for label in monitored_labels}
-        self._sync_alarms(device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label)
+
+        alarm_stats = self._sync_alarms(device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label)
+        cumulative_counts = self._violation_totals_by_device.get(device_name, {})
+
+        lifetime = self._fetch_lifetime_alarm_counts(device_name)
+        active = self._fetch_active_alarm_stats(device_name)
+
+        # Days since last alarm — updated in _sync_alarms when an alarm fires
+        last_ts = self._last_alarm_wall_ts.get(device_name)
+        days_since = round((time.time() - last_ts) / 86400, 1) if last_ts else None
 
         telemetry = {
             "ppe_violation": bool(monitored_hits),
             "ppe_violation_event": event_type,
-            "ppe_violation_count": len(monitored_hits or []),
+            "ppe_violation_count": sum(cumulative_counts.get(label, 0) for label in monitored_labels),
+            # ── session stats (alarms fired this gateway run) ─────────────────
+            "alarm_created_total": alarm_stats["total"],
+            "alarm_created_major": alarm_stats["MAJOR"],
+            "alarm_created_critical": alarm_stats["CRITICAL"],
+            # ── lifetime counts queried live from ThingsBoard ─────────────────
+            "lifetime_alarm_major": lifetime["MAJOR"],
+            "lifetime_alarm_critical": lifetime["CRITICAL"],
+            "lifetime_alarm_total": lifetime["MAJOR"] + lifetime["CRITICAL"],
+            # ── active / pending alarm dashboard KPIs ────────────────────────
+            "active_alarms_count": active["active_alarms_count"],
+            "unacknowledged_alarms": active["unacknowledged_alarms"],
+            "avg_ack_time_seconds": active["avg_ack_time_seconds"],
+            # ── days since last violation (reference: "13 days since incident")
+            "days_since_last_alarm": days_since,
+            # ── windowed counts (today / last 7 days / year-to-date) ──────────
+            **self._windowed_counters.snapshot(device_name),
+            # ─────────────────────────────────────────────────────────────────
             "ppe_violation_labels": json.dumps(monitored_hits or []),
             "detected_labels": json.dumps(unique_labels or []),
             "frame_id": metadata.get("frame_id"),
@@ -153,10 +274,10 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
             telemetry["snapshot_url"] = frame_url
 
         for label in monitored_labels:
-            count = label_counts[label]
+            count = cumulative_counts.get(label, 0)
             telemetry[self._count_key(label)] = count
-            telemetry[self._flag_key(label)] = count > 0
-            telemetry[self._event_key(label)] = "raised" if count > 0 else "cleared"
+            telemetry[self._flag_key(label)] = label_counts[label] > 0
+            telemetry[self._event_key(label)] = "raised" if label_counts[label] > 0 else "cleared"
 
         if timestamp_ms is None:
             converted.add_to_telemetry(telemetry)
@@ -185,47 +306,61 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
     def _sync_alarms(self, device_name, timestamp_ms, metadata, label_counts, frame_reference, frame_url, live_stream_url, camera_label):
         device_id = self._get_device_id(device_name)
         if not device_id:
-            return
+            return {"total": 0, "MAJOR": 0, "CRITICAL": 0}
 
         event_ts = timestamp_ms or int(time.time() * 1000)
-        
-        # Extract all persons with their violations from metadata
+        alarm_stats = {"total": 0, "MAJOR": 0, "CRITICAL": 0}
+
         persons_violations = self._extract_persons_with_violations(metadata, label_counts)
-        
-        # If no persons with violations, return
         if not persons_violations:
-            return
-        
-        # Process each person + violation combination
+            return alarm_stats
+
+        device_totals = self._violation_totals_by_device.setdefault(device_name, {})
+
         for person_id, label in persons_violations:
             alarm_type = self.ALARM_TYPE_BY_LABEL.get(label)
             if not alarm_type:
                 continue
-            
-            # Create a key for this person+violation combination
+
             alarm_key = (device_id, person_id, label)
-            
-            # Only create a NEW alarm if this is the first time we're seeing this person+violation combo
-            if alarm_key not in self._alarm_state:
-                self._log.info("Creating alarm for person %s with violation: %s", person_id, label)
-                self._alarm_state[alarm_key] = True
-                
-                # Include person_id in alarm type to make each person+violation unique in ThingsBoard
-                unique_alarm_type = f"{alarm_type} ({person_id})"
-                
-                # CREATE new alarm for this person+violation combination
-                self._create_or_update_alarm(
-                    device_id,
-                    unique_alarm_type,
-                    label,
-                    person_id,
-                    event_ts,
-                    metadata,
-                    frame_reference,
-                    frame_url,
-                    live_stream_url,
-                    camera_label,
+            last_alarm_ts = self._last_alarm_time.get(alarm_key, 0)
+            current_ts = event_ts / 1000.0
+
+            if current_ts - last_alarm_ts < self._alarm_throttle_seconds:
+                self._log.debug(
+                    "Throttling alarm for %s: %s (%.1f seconds since last)",
+                    person_id, label, current_ts - last_alarm_ts,
+                )
+                continue
+
+            unique_alarm_type = f"{alarm_type} ({person_id}) {event_ts}"
+            self._log.info("Creating alarm for person %s with violation: %s", person_id, label)
+            self._last_alarm_time[alarm_key] = current_ts
+
+            alarm_id = self._create_or_update_alarm(
+                device_id,
+                unique_alarm_type,
+                label,
+                person_id,
+                event_ts,
+                metadata,
+                frame_reference,
+                frame_url,
+                live_stream_url,
+                camera_label,
             )
+            if alarm_id:
+                alarm_stats["total"] += 1
+                severity = self.ALARM_SEVERITY_BY_LABEL.get(label, "MAJOR")
+                if severity in alarm_stats:
+                    alarm_stats[severity] += 1
+                device_totals[label] = device_totals.get(label, 0) + 1
+                # ── increment windowed counters (only when alarm actually fires) ──
+                self._windowed_counters.increment(device_name, severity, event_ts)
+                # Record wall-clock time of last fired alarm for days_since_last_alarm
+                self._last_alarm_wall_ts[device_name] = time.time()
+
+        return alarm_stats
 
     def _get_device_id(self, device_name):
         cached = self._device_id_cache.get(device_name)
@@ -241,6 +376,93 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         device_id = response["id"]["id"]
         self._device_id_cache[device_name] = device_id
         return device_id
+
+    def _fetch_lifetime_alarm_counts(self, device_name):
+        """
+        Query ThingsBoard directly for the true lifetime alarm counts for this
+        device. Results are cached for _lifetime_counts_ttl seconds so we don't
+        hammer the REST API on every frame.
+
+        Returns {"MAJOR": int, "CRITICAL": int}.
+        """
+        now = time.time()
+        last = self._lifetime_counts_last_fetch.get(device_name, 0)
+        if now - last < self._lifetime_counts_ttl and device_name in self._lifetime_counts_cache:
+            return self._lifetime_counts_cache[device_name]
+
+        device_id = self._get_device_id(device_name)
+        counts = {"MAJOR": 0, "CRITICAL": 0}
+
+        if not device_id:
+            return counts
+
+        for severity in ("MAJOR", "CRITICAL"):
+            # pageSize=1 — we only need totalElements, not the actual alarms
+            path = (
+                f"/api/alarm/DEVICE/{device_id}"
+                f"?pageSize=1&page=0&severity={severity}"
+            )
+            response = self._tb_request("GET", path)
+            if response and "totalElements" in response:
+                counts[severity] = int(response["totalElements"])
+            else:
+                # fall back to cached value rather than zeroing out
+                cached = self._lifetime_counts_cache.get(device_name, {})
+                counts[severity] = cached.get(severity, 0)
+                self._log.warning(
+                    "Could not fetch lifetime %s alarm count for %s, using cached %d",
+                    severity, device_name, counts[severity],
+                )
+
+        self._lifetime_counts_cache[device_name] = counts
+        self._lifetime_counts_last_fetch[device_name] = now
+        return counts
+
+    def _fetch_active_alarm_stats(self, device_name):
+        """
+        Query ThingsBoard for:
+          - active_alarms_count       : total ACTIVE alarms (any severity)
+          - unacknowledged_alarms     : ACTIVE + UNACKNOWLEDGED alarms
+          - avg_ack_time_seconds      : mean time (s) between createdTime → ackTime
+                                        across the last 50 acknowledged alarms
+        Results cached for _active_stats_ttl seconds.
+        """
+        now = time.time()
+        if (now - self._active_stats_last_fetch.get(device_name, 0) < self._active_stats_ttl
+                and device_name in self._active_stats_cache):
+            return self._active_stats_cache[device_name]
+
+        device_id = self._get_device_id(device_name)
+        stats = {"active_alarms_count": 0, "unacknowledged_alarms": 0, "avg_ack_time_seconds": None}
+
+        if not device_id:
+            return stats
+
+        # Active alarms (any severity)
+        resp = self._tb_request("GET", f"/api/alarm/DEVICE/{device_id}?pageSize=1&page=0&statusList=ACTIVE")
+        if resp and "totalElements" in resp:
+            stats["active_alarms_count"] = int(resp["totalElements"])
+
+        # Active + unacknowledged
+        resp2 = self._tb_request("GET", f"/api/alarm/DEVICE/{device_id}?pageSize=1&page=0&statusList=ACTIVE_UNACK")
+        if resp2 and "totalElements" in resp2:
+            stats["unacknowledged_alarms"] = int(resp2["totalElements"])
+
+        # Average ack response time from last 50 acknowledged alarms
+        resp3 = self._tb_request("GET", f"/api/alarm/DEVICE/{device_id}?pageSize=50&page=0&statusList=ACK")
+        if resp3 and resp3.get("data"):
+            ack_times = []
+            for alarm in resp3["data"]:
+                created = alarm.get("createdTime")
+                acked = alarm.get("ackTs")
+                if created and acked and acked > created:
+                    ack_times.append((acked - created) / 1000.0)
+            if ack_times:
+                stats["avg_ack_time_seconds"] = round(sum(ack_times) / len(ack_times), 1)
+
+        self._active_stats_cache[device_name] = stats
+        self._active_stats_last_fetch[device_name] = now
+        return stats
 
     def _create_or_update_alarm(self, device_id, alarm_type, label, person_id, event_ts, metadata, frame_reference, frame_url, live_stream_url, camera_label):
         details = {
@@ -284,32 +506,24 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         return bool(response and response.get("cleared") is True)
 
     def _extract_persons_with_violations(self, metadata, label_counts):
-        """
-        Extract list of (person_id, label) tuples for all persons with violations.
-        If person ID is not available, use frame_id + object_index as unique identifier.
-        """
         persons_violations = []
-        
+
         try:
-            # Try to extract from gva_meta (Intel GVA format)
             for obj_idx, obj in enumerate(metadata.get("gva_meta") or []):
                 if not obj:
                     continue
                 person_id = obj.get("object_id") or f"person_{obj_idx}"
                 detected_labels = []
-                
                 for tensor in obj.get("tensor") or []:
                     if tensor:
                         label = tensor.get("label")
                         if label and label in label_counts:
                             detected_labels.append(label)
-                
                 for label in detected_labels:
                     persons_violations.append((person_id, label))
         except Exception as e:
             self._log.warning("Error extracting persons from gva_meta: %s", str(e))
-        
-        # If no persons extracted from gva_meta, try objects field
+
         if not persons_violations:
             try:
                 for obj_idx, obj in enumerate(metadata.get("objects") or []):
@@ -318,13 +532,13 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                     person_id = obj.get("id") or obj.get("object_id") or f"person_{obj_idx}"
                     detection = obj.get("detection") or {}
                     label = detection.get("label")
-                    
                     if label and label in label_counts:
                         persons_violations.append((person_id, label))
             except Exception as e:
                 self._log.warning("Error extracting persons from objects: %s", str(e))
-        
+
         return persons_violations
+
     def _save_frame_reference(self, device_name, timestamp_ms, metadata, blob, frames_directory, frames_reference_prefix):
         image_bytes = self._decode_blob(blob)
         if not image_bytes:
@@ -333,8 +547,7 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         frame_ts = timestamp_ms or int(time.time() * 1000)
         safe_device_name = re.sub(r"[^A-Za-z0-9._-]+", "-", device_name).strip("-") or "device"
         frame_id = metadata.get("frame_id")
-        
-        # Build unique filename based on frame_id (primary) or timestamp + uuid (fallback)
+
         if frame_id is not None:
             filename = f"frame-{frame_id}.jpg"
         else:
@@ -346,17 +559,14 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
         os.makedirs(device_directory, exist_ok=True)
 
         file_path = os.path.join(device_directory, filename)
-        # Only write if file doesn't exist (avoid overwriting)
         if not os.path.exists(file_path):
             with open(file_path, "wb") as frame_file:
                 frame_file.write(image_bytes)
-        
-        # Keep cache size manageable (last 1000 frames per device)
+
         try:
             cache_key_prefix = device_name
             cache_keys = [k for k in self._frame_cache.keys() if k and len(k) > 0 and k[0] == cache_key_prefix]
             if len(cache_keys) > 1000:
-                # Remove oldest entries (keep newest 1000)
                 for old_key in sorted(cache_keys)[:-1000]:
                     if old_key in self._frame_cache:
                         del self._frame_cache[old_key]
@@ -374,20 +584,15 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
     def _decode_blob(self, blob):
         if blob in (None, ""):
             return None
-
         if isinstance(blob, bytes):
             return blob
-
         if not isinstance(blob, str):
             return None
-
         blob = blob.strip()
         if not blob:
             return None
-
         if blob.startswith("data:"):
             _, _, blob = blob.partition(",")
-
         try:
             return base64.b64decode(blob, validate=True)
         except (binascii.Error, ValueError):
@@ -461,10 +666,8 @@ class CustomMqttUplinkConverter(MqttUplinkConverter):
                 label = tensor.get("label")
                 if label:
                     labels.append(label)
-
         if labels:
             return labels
-
         for obj in metadata.get("objects") or []:
             detection = obj.get("detection") or {}
             label = detection.get("label")
