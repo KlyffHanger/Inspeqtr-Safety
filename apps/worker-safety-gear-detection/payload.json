@@ -64,5 +64,59 @@
         }
       }
     }
+  },
+  {
+    "pipeline": "worker_safety_gear_detection_webcam_tb",
+    "payload": {
+      "source": {
+        "uri": "v4l2:///dev/video4",
+        "type": "uri"
+      },
+      "destination": {
+        "metadata": {
+          "type": "mqtt",
+          "publish_frame": false,
+          "topic": "worker_safety_predictions_cam1"
+        },
+        "frame": {
+          "type": "webrtc",
+          "peer-id": "worker_safety_webcam_tb"
+        }
+      },
+      "parameters": {
+        "detection-properties": {
+          "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
+          "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
+          "device": "CPU"
+        }
+      }
+    }
+  },
+  {
+    "pipeline": "worker_safety_gear_detection_webcam_2_tb",
+    "payload": {
+      "source": {
+        "uri": "v4l2:///dev/video0",
+        "type": "uri"
+      },
+      "destination": {
+        "metadata": {
+          "type": "mqtt",
+          "publish_frame": false,
+          "topic": "worker_safety_predictions_cam2"
+        },
+        "frame": {
+          "type": "webrtc",
+          "peer-id": "worker_safety_webcam_2_tb"
+        }
+      },
+      "parameters": {
+        "detection-properties": {
+          "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
+          "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
+          "device": "CPU"
+        }
+      }
+    }
   }
 ]

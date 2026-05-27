@@ -115,6 +115,52 @@ services:
       - mraas
     volumes:
       - ./apps/${SAMPLE_APP}/configs/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  thingsboard-bridge-cam1:
+    build:
+      context: ./services/thingsboard-bridge
+    container_name: thingsboard-bridge-cam1
+    depends_on:
+      - mqtt-broker
+    networks:
+      - mraas
+    environment:
+      LOCAL_MQTT_HOST: mqtt-broker
+      LOCAL_MQTT_PORT: 1883
+      LOCAL_MQTT_TOPIC: ${LOCAL_MQTT_TOPIC_CAM1}
+      THINGSBOARD_HOST: ${THINGSBOARD_HOST}
+      THINGSBOARD_PORT: ${THINGSBOARD_PORT}
+      THINGSBOARD_TOKEN: ${THINGSBOARD_TOKEN_CAM1}
+      THINGSBOARD_TOPIC: ${THINGSBOARD_TOPIC}
+      MQTT_QOS: ${THINGSBOARD_MQTT_QOS}
+      QUEUE_MAXSIZE: ${THINGSBOARD_QUEUE_MAXSIZE}
+      RETRY_BACKOFF_SECONDS: ${THINGSBOARD_RETRY_BACKOFF_SECONDS}
+      PUBLISH_TIMEOUT_SECONDS: ${THINGSBOARD_PUBLISH_TIMEOUT_SECONDS}
+      MIN_PUBLISH_INTERVAL_SECONDS: ${THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS}
+    restart: unless-stopped
+
+  thingsboard-bridge-cam2:
+    build:
+      context: ./services/thingsboard-bridge
+    container_name: thingsboard-bridge-cam2
+    depends_on:
+      - mqtt-broker
+    networks:
+      - mraas
+    environment:
+      LOCAL_MQTT_HOST: mqtt-broker
+      LOCAL_MQTT_PORT: 1883
+      LOCAL_MQTT_TOPIC: ${LOCAL_MQTT_TOPIC_CAM2}
+      THINGSBOARD_HOST: ${THINGSBOARD_HOST}
+      THINGSBOARD_PORT: ${THINGSBOARD_PORT}
+      THINGSBOARD_TOKEN: ${THINGSBOARD_TOKEN_CAM2}
+      THINGSBOARD_TOPIC: ${THINGSBOARD_TOPIC}
+      MQTT_QOS: ${THINGSBOARD_MQTT_QOS}
+      QUEUE_MAXSIZE: ${THINGSBOARD_QUEUE_MAXSIZE}
+      RETRY_BACKOFF_SECONDS: ${THINGSBOARD_RETRY_BACKOFF_SECONDS}
+      PUBLISH_TIMEOUT_SECONDS: ${THINGSBOARD_PUBLISH_TIMEOUT_SECONDS}
+      MIN_PUBLISH_INTERVAL_SECONDS: ${THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS}
+    restart: unless-stopped
       
   nginx:
     image: nginx:1.27-alpine
@@ -274,4 +320,3 @@ volumes:
     driver: local
   prometheus_data:
     driver: local
-

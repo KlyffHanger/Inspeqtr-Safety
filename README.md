@@ -43,6 +43,66 @@
    }
    ```
 
+5. **Use a local USB webcam instead of a video file**
+
+   A webcam payload is already included in:
+   - `apps/worker-safety-gear-detection/payload.json`
+
+   Default webcam source:
+   ```json
+   "source": {
+     "uri": "v4l2:///dev/video4",
+     "type": "uri"
+   }
+   ```
+
+   If your camera is exposed on a different device, change `/dev/video4` to the correct device path.
+
+   A second webcam payload is also included:
+   ```json
+   "source": {
+     "uri": "v4l2:///dev/video0",
+     "type": "uri"
+   }
+   ```
+
+6. **Forward prediction telemetry to ThingsBoard**
+
+   Fill in these values in `.env`:
+   ```dotenv
+   THINGSBOARD_HOST=<your-thingsboard-host>
+   THINGSBOARD_PORT=1883
+   THINGSBOARD_TOKEN_CAM1=<external-webcam-device-token>
+   THINGSBOARD_TOKEN_CAM2=<integrated-webcam-device-token>
+   THINGSBOARD_TOPIC=v1/devices/me/telemetry
+   ```
+
+   The stack includes one Python bridge per camera:
+   - camera 1 subscribes to `worker_safety_predictions_cam1`
+   - camera 2 subscribes to `worker_safety_predictions_cam2`
+
+   Each bridge republishes to ThingsBoard over MQTT using its own device token.
+   The bridge includes structured JSON logs, reconnect handling, and publish retry/backoff.
+
+   Optional tuning:
+   ```dotenv
+   THINGSBOARD_MQTT_QOS=0
+   THINGSBOARD_QUEUE_MAXSIZE=1
+   THINGSBOARD_RETRY_BACKOFF_SECONDS=2
+   THINGSBOARD_PUBLISH_TIMEOUT_SECONDS=10
+   THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS=2
+   ```
+
+   To stream video and publish metadata from the external webcam:
+   ```bash
+   ./sample_start.sh -p worker_safety_gear_detection_webcam_tb
+   ```
+
+   To stream video and publish metadata from the integrated webcam:
+   ```bash
+   ./sample_start.sh -p worker_safety_gear_detection_webcam_2_tb
+   ```
+
 ## Deploy the Application
 
 1. Start the Docker application:
@@ -96,6 +156,16 @@
    ```bash
    ./sample_start.sh -p worker_safety_gear_detection
    ```
+
+   To run the webcam pipeline instead:
+   ```bash
+   ./sample_start.sh -p worker_safety_gear_detection_webcam
+   ```
+
+   To run the second webcam pipeline:
+   ```bash
+   ./sample_start.sh -p worker_safety_gear_detection_webcam_2
+   ```
    Output:
 
    ```text
@@ -120,6 +190,25 @@
 
    ```sh
    https://localhost/mediamtx/worker_safety/
+   ```
+
+   Webcam output is published at:
+
+   ```sh
+   https://localhost/mediamtx/worker_safety_webcam/
+   ```
+
+   Second webcam output is published at:
+
+   ```sh
+   https://localhost/mediamtx/worker_safety_webcam_2/
+   ```
+
+   ThingsBoard-enabled webcam streams are published at:
+
+   ```sh
+   https://localhost/mediamtx/worker_safety_webcam_tb/
+   https://localhost/mediamtx/worker_safety_webcam_2_tb/
    ```
 
 4. Get the status of running pipeline instance(s).
@@ -160,4 +249,3 @@
    ```
 
   
-
