@@ -1,75 +1,9 @@
 [
   {
-    "pipeline": "worker_safety_gear_detection",
+    "pipeline": "worker_safety_gear_detection_mqtt",
     "payload": {
       "source": {
-        "uri": "file:///home/pipeline-server/resources/videos/Safety_Full_Hat_and_Vest.avi",
-        "type": "uri"
-      },
-      "destination": {
-        "frame": {
-          "type": "webrtc",
-          "peer-id": "worker_safety"
-        }
-      },
-      "parameters": {
-        "detection-properties": {
-          "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
-          "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
-          "device": "CPU"
-        }
-      }
-    }
-  },
-  {
-    "pipeline": "worker_safety_gear_detection_mlops",
-    "payload": {
-      "source": {
-        "uri": "file:///home/pipeline-server/resources/videos/Safety_Full_Hat_and_Vest.avi",
-        "type": "uri"
-      },
-      "destination": {
-        "frame": {
-          "type": "webrtc",
-          "peer-id": "worker_safety"
-        }
-      },
-      "parameters": {
-        "detection-properties": {
-          "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
-          "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
-          "device": "CPU"
-        }
-      }
-    }
-  },
-  {
-    "pipeline": "worker_safety_gear_detection_gpu",
-    "payload": {
-      "source": {
-        "uri": "file:///home/pipeline-server/resources/videos/Safety_Full_Hat_and_Vest.avi",
-        "type": "uri"
-      },
-      "destination": {
-        "frame": {
-          "type": "webrtc",
-          "peer-id": "worker_safety"
-        }
-      },
-      "parameters": {
-        "detection-properties": {
-          "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
-          "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
-          "device": "GPU"
-        }
-      }
-    }
-  },
-  {
-    "pipeline": "worker_safety_gear_detection_webcam_tb",
-    "payload": {
-      "source": {
-        "uri": "v4l2:///dev/video4",
+        "uri": "rtsp://mediamtx-server:8554/cam1",
         "type": "uri"
       },
       "destination": {
@@ -80,23 +14,28 @@
         },
         "frame": {
           "type": "webrtc",
-          "peer-id": "worker_safety_webcam_tb"
+          "peer-id": "worker_safety_rtsp_cam1"
         }
       },
       "parameters": {
         "detection-properties": {
+          "device": "CPU",
           "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
           "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
-          "device": "CPU"
+          "model-instance-id": "instnvr0",
+          "batch-size": 3,
+          "nireq": 2,
+          "inference-interval": 3,
+          "threshold": 0.7
         }
       }
     }
   },
   {
-    "pipeline": "worker_safety_gear_detection_webcam_2_tb",
+    "pipeline": "worker_safety_gear_detection_mqtt",
     "payload": {
       "source": {
-        "uri": "v4l2:///dev/video0",
+        "uri": "rtsp://mediamtx-server:8554/cam2",
         "type": "uri"
       },
       "destination": {
@@ -107,14 +46,51 @@
         },
         "frame": {
           "type": "webrtc",
-          "peer-id": "worker_safety_webcam_2_tb"
+          "peer-id": "worker_safety_rtsp_cam2"
         }
       },
       "parameters": {
         "detection-properties": {
+          "device": "CPU",
           "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
           "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
-          "device": "CPU"
+          "model-instance-id": "instnvr0",
+          "batch-size": 3,
+          "nireq": 2,
+          "inference-interval": 3,
+          "threshold": 0.7
+        }
+      }
+    }
+  },
+  {
+    "pipeline": "worker_safety_gear_detection_mqtt",
+    "payload": {
+      "source": {
+        "uri": "rtsp://mediamtx-server:8554/cam3",
+        "type": "uri"
+      },
+      "destination": {
+        "metadata": {
+          "type": "mqtt",
+          "publish_frame": false,
+          "topic": "worker_safety_predictions_cam3"
+        },
+        "frame": {
+          "type": "webrtc",
+          "peer-id": "worker_safety_rtsp_cam3"
+        }
+      },
+      "parameters": {
+        "detection-properties": {
+          "device": "CPU",
+          "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
+          "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json",
+          "model-instance-id": "instnvr0",
+          "batch-size": 3,
+          "nireq": 2,
+          "inference-interval": 3,
+          "threshold": 0.7
         }
       }
     }

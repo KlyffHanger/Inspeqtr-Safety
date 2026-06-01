@@ -23,7 +23,7 @@
                 "name": "worker_safety_gear_detection_mqtt",
                 "source": "gstreamer",
                 "queue_maxsize": 50,
-                "pipeline": "{auto_source} name=source ! decodebin ! videoconvert ! gvadetect name=detection model-instance-id=inst0 ! gvametaconvert add-empty-results=true name=metaconvert ! queue ! gvawatermark ! queue ! gvafpscounter ! queue ! jpegenc ! appsink name=destination",
+                "pipeline": "{auto_source} name=source ! queue max-size-buffers=8 leaky=downstream ! decodebin ! videoconvert ! video/x-raw,format=BGRx ! queue max-size-buffers=4 leaky=downstream ! gvadetect name=detection pre-process-backend=opencv model-instance-id=instnvr0 batch-size=4 nireq=2 inference-region=full-frame inference-interval=1 ! queue ! gvametaconvert add-empty-results=true name=metaconvert ! queue ! gvawatermark ! queue ! gvafpscounter ! queue ! jpegenc ! appsink name=destination",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -139,8 +139,8 @@
             {
                 "name": "worker_safety_gear_detection_webcam_tb",
                 "source": "gstreamer",
-                "queue_maxsize": 50,
-                "pipeline": "v4l2src device=/dev/video4 name=source ! image/jpeg,width=1280,height=720,framerate=30/1 ! jpegdec ! videoconvert ! gvadetect name=detection model-instance-id=inst0 ! gvametaconvert add-empty-results=true name=metaconvert ! queue ! gvawatermark ! queue ! gvafpscounter ! queue ! jpegenc ! appsink name=destination",
+                "queue_maxsize": 4,
+                "pipeline": "v4l2src device=/dev/video4 name=source ! video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! queue leaky=downstream max-size-buffers=1 ! gvadetect name=detection model-instance-id=inst0 ! gvametaconvert add-empty-results=true name=metaconvert ! queue leaky=downstream max-size-buffers=1 ! gvawatermark ! queue leaky=downstream max-size-buffers=1 ! gvafpscounter ! queue leaky=downstream max-size-buffers=1 ! jpegenc ! appsink name=destination",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -157,8 +157,8 @@
             {
                 "name": "worker_safety_gear_detection_webcam_2_tb",
                 "source": "gstreamer",
-                "queue_maxsize": 50,
-                "pipeline": "v4l2src device=/dev/video0 name=source ! image/jpeg,width=1280,height=720,framerate=30/1 ! jpegdec ! videoconvert ! gvadetect name=detection model-instance-id=inst0 ! gvametaconvert add-empty-results=true name=metaconvert ! queue ! gvawatermark ! queue ! gvafpscounter ! queue ! jpegenc ! appsink name=destination",
+                "queue_maxsize": 4,
+                "pipeline": "v4l2src device=/dev/video0 name=source ! video/x-raw,width=320,height=240,framerate=30/1 ! videoconvert ! queue leaky=downstream max-size-buffers=1 ! gvadetect name=detection model-instance-id=inst0 ! gvametaconvert add-empty-results=true name=metaconvert ! queue leaky=downstream max-size-buffers=1 ! gvawatermark ! queue leaky=downstream max-size-buffers=1 ! gvafpscounter ! queue leaky=downstream max-size-buffers=1 ! jpegenc ! appsink name=destination",
                 "parameters": {
                     "type": "object",
                     "properties": {

@@ -2,8 +2,8 @@
 # This script is used to start pipelines in the dlstreamer-pipeline-server
 # ------------------------------------------------------------------
 # 1. Check if DLSPS server is reachable- status API
-# 2. Check if payload.json(json array) exists
-# 	a. If yes, loads them as a json array, as pipeline, payloads map
+# 2. Check if payload.json (json array) exists
+# 	a. If yes, loads it as a json array, as pipeline, payloads map
 # 3. Based on argument, start all or pipeline(s)
 # 	a. starting a pipeline
 # 		i. fetch the payload(s) from the loaded pipeline-payload map
@@ -52,7 +52,13 @@ init() {
 
 load_payload() {
     # Load all pipelines payload
-    PAYLOAD_FILE="$APP_DIR/payload.json"
+    GENERATOR_SCRIPT="$APP_DIR/generate_configs.py"
+    CAMERAS_FILE="$APP_DIR/cameras.json"
+    PAYLOAD_FILE="${PAYLOAD_FILE:-$APP_DIR/payload.json}"
+    if [[ -f "$CAMERAS_FILE" && -f "$GENERATOR_SCRIPT" ]]; then
+        echo "Generating camera-driven config from $CAMERAS_FILE"
+        python3 "$GENERATOR_SCRIPT"
+    fi
     if [[ -f "$PAYLOAD_FILE" ]]; then
         echo "Loading payload from $PAYLOAD_FILE"
         if command -v jq &>/dev/null; then

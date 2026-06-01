@@ -1,0 +1,35 @@
+{
+  "default_device": "CPU",
+  "topology": {
+    "mode": "shared_nvr",
+    "pipeline": "worker_safety_gear_detection_mqtt",
+    "model_instance_id": "instnvr0",
+    "batch_size": "auto",
+    "nireq": 2,
+    "inference_interval": 3,
+    "threshold": 0.7
+  },
+  "cameras": [
+    {
+      "id": "cam1",
+      "source_uri": "rtsp://mediamtx-server:8554/cam1",
+      "metadata_topic": "worker_safety_predictions_cam1",
+      "peer_id": "worker_safety_rtsp_cam1",
+      "thingsboard_token_env": "THINGSBOARD_TOKEN_CAM1"
+    },
+    {
+      "id": "cam2",
+      "source_uri": "rtsp://mediamtx-server:8554/cam2",
+      "metadata_topic": "worker_safety_predictions_cam2",
+      "peer_id": "worker_safety_rtsp_cam2",
+      "thingsboard_token_env": "THINGSBOARD_TOKEN_CAM2"
+    },
+    {
+      "id": "cam3",
+      "source_uri": "rtsp://mediamtx-server:8554/cam3",
+      "metadata_topic": "worker_safety_predictions_cam3",
+      "peer_id": "worker_safety_rtsp_cam3",
+      "thingsboard_token_env": "THINGSBOARD_TOKEN_CAM3"
+    }
+  ]
+}

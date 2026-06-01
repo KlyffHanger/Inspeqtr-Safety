@@ -88,7 +88,6 @@ services:
     container_name: mediamtx-server
     environment:
       - MTX_LOGLEVEL=debug
-      - MTX_RTSP=no
       - MTX_RTMP=no
       - MTX_HLS=no
       - MTX_SRT=no
@@ -99,6 +98,123 @@ services:
       - MTX_WEBRTCLOCALTCPADDRESS=:8189
     networks:
     - mraas
+
+  webcam-rtsp-cam1:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    container_name: webcam-rtsp-cam1
+    depends_on:
+      - mediamtx
+    command:
+      - -hide_banner
+      - -loglevel
+      - warning
+      - -f
+      - v4l2
+      - -framerate
+      - "30"
+      - -video_size
+      - 320x240
+      - -i
+      - /dev/video4
+      - -an
+      - -vf
+      - format=yuv420p
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx-server:8554/cam1
+    devices:
+      - /dev/video4:/dev/video4
+    networks:
+      - mraas
+    restart: unless-stopped
+
+  webcam-rtsp-cam2:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    container_name: webcam-rtsp-cam2
+    depends_on:
+      - mediamtx
+    command:
+      - -hide_banner
+      - -loglevel
+      - warning
+      - -f
+      - v4l2
+      - -framerate
+      - "30"
+      - -video_size
+      - 320x240
+      - -i
+      - /dev/video0
+      - -an
+      - -vf
+      - format=yuv420p
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx-server:8554/cam2
+    devices:
+      - /dev/video0:/dev/video0
+    networks:
+      - mraas
+    restart: unless-stopped
+
+  webcam-rtsp-cam3:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    container_name: webcam-rtsp-cam3
+    depends_on:
+      - mediamtx
+    command:
+      - -hide_banner
+      - -loglevel
+      - warning
+      - -f
+      - v4l2
+      - -framerate
+      - "30"
+      - -video_size
+      - 320x240
+      - -i
+      - /dev/video2
+      - -an
+      - -vf
+      - format=yuv420p
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx-server:8554/cam3
+    devices:
+      - /dev/video2:/dev/video2
+    networks:
+      - mraas
+    restart: unless-stopped
 
   coturn:
     image: coturn/coturn:latest
@@ -116,50 +232,30 @@ services:
     volumes:
       - ./apps/${SAMPLE_APP}/configs/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
-  thingsboard-bridge-cam1:
+  thingsboard-bridge:
     build:
       context: ./services/thingsboard-bridge
-    container_name: thingsboard-bridge-cam1
+    container_name: thingsboard-bridge
     depends_on:
       - mqtt-broker
+    env_file:
+      - ./.env
     networks:
       - mraas
+    volumes:
+      - ./apps/${SAMPLE_APP}/thingsboard-routes.json:/config/thingsboard-routes.json:ro
     environment:
       LOCAL_MQTT_HOST: mqtt-broker
       LOCAL_MQTT_PORT: 1883
-      LOCAL_MQTT_TOPIC: ${LOCAL_MQTT_TOPIC_CAM1}
+      THINGSBOARD_ROUTES_FILE: /config/thingsboard-routes.json
       THINGSBOARD_HOST: ${THINGSBOARD_HOST}
       THINGSBOARD_PORT: ${THINGSBOARD_PORT}
-      THINGSBOARD_TOKEN: ${THINGSBOARD_TOKEN_CAM1}
       THINGSBOARD_TOPIC: ${THINGSBOARD_TOPIC}
-      MQTT_QOS: ${THINGSBOARD_MQTT_QOS}
-      QUEUE_MAXSIZE: ${THINGSBOARD_QUEUE_MAXSIZE}
-      RETRY_BACKOFF_SECONDS: ${THINGSBOARD_RETRY_BACKOFF_SECONDS}
-      PUBLISH_TIMEOUT_SECONDS: ${THINGSBOARD_PUBLISH_TIMEOUT_SECONDS}
-      MIN_PUBLISH_INTERVAL_SECONDS: ${THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS}
-    restart: unless-stopped
-
-  thingsboard-bridge-cam2:
-    build:
-      context: ./services/thingsboard-bridge
-    container_name: thingsboard-bridge-cam2
-    depends_on:
-      - mqtt-broker
-    networks:
-      - mraas
-    environment:
-      LOCAL_MQTT_HOST: mqtt-broker
-      LOCAL_MQTT_PORT: 1883
-      LOCAL_MQTT_TOPIC: ${LOCAL_MQTT_TOPIC_CAM2}
-      THINGSBOARD_HOST: ${THINGSBOARD_HOST}
-      THINGSBOARD_PORT: ${THINGSBOARD_PORT}
-      THINGSBOARD_TOKEN: ${THINGSBOARD_TOKEN_CAM2}
-      THINGSBOARD_TOPIC: ${THINGSBOARD_TOPIC}
-      MQTT_QOS: ${THINGSBOARD_MQTT_QOS}
-      QUEUE_MAXSIZE: ${THINGSBOARD_QUEUE_MAXSIZE}
-      RETRY_BACKOFF_SECONDS: ${THINGSBOARD_RETRY_BACKOFF_SECONDS}
-      PUBLISH_TIMEOUT_SECONDS: ${THINGSBOARD_PUBLISH_TIMEOUT_SECONDS}
-      MIN_PUBLISH_INTERVAL_SECONDS: ${THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS}
+      MQTT_QOS: ${THINGSBOARD_MQTT_QOS:-0}
+      QUEUE_MAXSIZE: ${THINGSBOARD_QUEUE_MAXSIZE:-1}
+      RETRY_BACKOFF_SECONDS: ${THINGSBOARD_RETRY_BACKOFF_SECONDS:-2}
+      PUBLISH_TIMEOUT_SECONDS: ${THINGSBOARD_PUBLISH_TIMEOUT_SECONDS:-10}
+      MIN_PUBLISH_INTERVAL_SECONDS: ${THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS:-2}
     restart: unless-stopped
       
   nginx:
