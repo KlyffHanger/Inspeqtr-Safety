@@ -113,7 +113,7 @@ services:
       - -framerate
       - "30"
       - -video_size
-      - 320x240
+      - 160x120
       - -i
       - /dev/video4
       - -an
@@ -243,19 +243,25 @@ services:
     networks:
       - mraas
     volumes:
-      - ./apps/${SAMPLE_APP}/thingsboard-routes.json:/config/thingsboard-routes.json:ro
+      - ./apps/${SAMPLE_APP}/nvr-base-config.json:/config/nvr-base-config.json:ro
+      - ./apps/${SAMPLE_APP}/detection-config.json:/config/detection-config.json:ro
+      - ./apps/${SAMPLE_APP}/runtime:/runtime
     environment:
       LOCAL_MQTT_HOST: mqtt-broker
       LOCAL_MQTT_PORT: 1883
-      THINGSBOARD_ROUTES_FILE: /config/thingsboard-routes.json
-      THINGSBOARD_HOST: ${THINGSBOARD_HOST}
-      THINGSBOARD_PORT: ${THINGSBOARD_PORT}
-      THINGSBOARD_TOPIC: ${THINGSBOARD_TOPIC}
-      MQTT_QOS: ${THINGSBOARD_MQTT_QOS:-0}
-      QUEUE_MAXSIZE: ${THINGSBOARD_QUEUE_MAXSIZE:-1}
-      RETRY_BACKOFF_SECONDS: ${THINGSBOARD_RETRY_BACKOFF_SECONDS:-2}
-      PUBLISH_TIMEOUT_SECONDS: ${THINGSBOARD_PUBLISH_TIMEOUT_SECONDS:-10}
-      MIN_PUBLISH_INTERVAL_SECONDS: ${THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS:-2}
+      LOCAL_MQTT_QOS: ${LOCAL_MQTT_QOS:-0}
+      THINGSBOARD_API_BASE_URL: ${THINGSBOARD_API_BASE_URL:-}
+      THINGSBOARD_API_KEY: ${THINGSBOARD_API_KEY:-}
+      THINGSBOARD_USERNAME: ${THINGSBOARD_USERNAME:-}
+      THINGSBOARD_PASSWORD: ${THINGSBOARD_PASSWORD:-}
+      THINGSBOARD_DEVICE_TYPE_FILTER: ${THINGSBOARD_DEVICE_TYPE_FILTER:-}
+      THINGSBOARD_REQUIRE_NVR_ENABLED: ${THINGSBOARD_REQUIRE_NVR_ENABLED:-true}
+      THINGSBOARD_SYNC_POLL_SECONDS: ${THINGSBOARD_SYNC_POLL_SECONDS:-15}
+      PIPELINE_SERVER_URL: ${PIPELINE_SERVER_URL:-http://dlstreamer-pipeline-server:8080}
+      PIPELINE_SERVER_API_PREFIX: ${PIPELINE_SERVER_API_PREFIX:-}
+      NVR_BASE_CONFIG_FILE: /config/nvr-base-config.json
+      DETECTION_CONFIG_FILE: /config/detection-config.json
+      PIPELINE_STATE_FILE: /runtime/thingsboard-device-sync-state.json
     restart: unless-stopped
       
   nginx:
