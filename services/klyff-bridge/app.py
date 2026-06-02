@@ -1,4 +1,4 @@
-from nvr_orchestrator import main
+from klyff_bridge.main import main
 
 
 if __name__ == "__main__":

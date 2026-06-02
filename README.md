@@ -29,79 +29,60 @@
    ./setup.sh
    ```
 
-4. **Add or change videos**
+4. **Configure dynamic NVR device discovery from KLYFF**
 
+   The `klyff-bridge` service runs in dynamic sync mode. In this mode it:
+   - fetches device attributes from KLYFF at runtime;
+   - starts or restarts DL Streamer pipelines when devices are added or changed;
+   - subscribes to the corresponding local MQTT metadata topics;
+   - pushes flattened inference telemetry and sync status back to each KLYFF device.
+   - uses [nvr-base-config.json](/home/cleaff/Desktop/Inspeqtr-Safety/apps/worker-safety-gear-detection/nvr-base-config.json:1) for shared-NVR defaults instead of the static camera inventory.
 
-   Update the video path in:
-   - `apps/worker-safety-gear-detection/payload.json`
-
-   Example (set the `source.uri` to your file):
-   ```json
-   "source": {
-     "uri": "file:///home/pipeline-server/resources/videos/worker02.avi",
-     "type": "uri"
-   }
-   ```
-
-5. **Use a local USB webcam instead of a video file**
-
-   A webcam payload is already included in:
-   - `apps/worker-safety-gear-detection/payload.json`
-
-   Default webcam source:
-   ```json
-   "source": {
-     "uri": "v4l2:///dev/video4",
-     "type": "uri"
-   }
-   ```
-
-   If your camera is exposed on a different device, change `/dev/video4` to the correct device path.
-
-   A second webcam payload is also included:
-   ```json
-   "source": {
-     "uri": "v4l2:///dev/video0",
-     "type": "uri"
-   }
-   ```
-
-6. **Forward prediction telemetry to ThingsBoard**
-
-   Fill in these values in `.env`:
+   Enable it in `.env`:
    ```dotenv
-   THINGSBOARD_HOST=<your-thingsboard-host>
-   THINGSBOARD_PORT=1883
-   THINGSBOARD_TOKEN_CAM1=<external-webcam-device-token>
-   THINGSBOARD_TOKEN_CAM2=<integrated-webcam-device-token>
-   THINGSBOARD_TOPIC=v1/devices/me/telemetry
+   KLYFF_API_BASE_URL=https://<your-klyff-host>
+   KLYFF_API_KEY=<tenant-api-key>
+   KLYFF_REQUIRE_NVR_ENABLED=true
+   PIPELINE_SERVER_URL=http://dlstreamer-pipeline-server:8080
+   PIPELINE_SERVER_API_PREFIX=
+   LOCAL_MQTT_QOS=0
    ```
 
-   The stack includes one Python bridge per camera:
-   - camera 1 subscribes to `worker_safety_predictions_cam1`
-   - camera 2 subscribes to `worker_safety_predictions_cam2`
+   `PIPELINE_SERVER_API_PREFIX` should stay empty for direct container-to-container access.
+   If you ever route the sync service through nginx instead, set it to `/api`.
 
-   Each bridge republishes to ThingsBoard over MQTT using its own device token.
-   The bridge includes structured JSON logs, reconnect handling, and publish retry/backoff.
+   Minimal operator flow:
+   - create a device in KLYFF;
+   - add `nvrEnabled=true`;
+   - add `sourceUri=rtsp://...`;
+   - the sync service derives the rest from the device name and app defaults.
 
-   Optional tuning:
-   ```dotenv
-   THINGSBOARD_MQTT_QOS=0
-   THINGSBOARD_QUEUE_MAXSIZE=1
-   THINGSBOARD_RETRY_BACKOFF_SECONDS=2
-   THINGSBOARD_PUBLISH_TIMEOUT_SECONDS=10
-   THINGSBOARD_MIN_PUBLISH_INTERVAL_SECONDS=2
-   ```
+   Auto-derived defaults:
+   - `metadataTopic` becomes `worker_safety_predictions_<device-name-slug>`
+   - `peerId` becomes `worker_safety_rtsp_<device-name-slug>`
+   - `pipeline` falls back to the app topology default, currently `worker_safety_gear_detection_mqtt`
+   - `enabled` defaults to `true`
 
-   To stream video and publish metadata from the external webcam:
-   ```bash
-   ./sample_start.sh -p worker_safety_gear_detection_webcam_tb
-   ```
+   Optional device attributes:
+   - `metadataTopic`
+   - `peerId`
+   - `pipeline`
+   - `enabled`
+   - `useSharedPipeline` to opt a device out of shared batching
+   - `detectionProperties` as a JSON object
 
-   To stream video and publish metadata from the integrated webcam:
-   ```bash
-   ./sample_start.sh -p worker_safety_gear_detection_webcam_2_tb
-   ```
+   By default the app now follows the shared batched NVR model:
+   - each camera still launches its own pipeline instance;
+   - all cameras share the same `model-instance-id`;
+   - `batch-size` is auto-sized to the number of participating streams.
+   Set `useSharedPipeline=false` on a device only if you want it isolated from the shared batch.
+
+   The resolved values are written back to the device as server attributes:
+   - `nvrMetadataTopic`
+   - `nvrPeerId`
+   - `nvrPipelineName`
+   - `nvrSourceUri`
+   - `nvrSyncStatus`
 
 ## Deploy the Application
 
@@ -111,138 +92,36 @@
    docker compose up -d
    ```
 
-2. Fetch the list of pipeline loaded available to launch
+2. Add a device in KLYFF.
 
-   ```bash
-   ./sample_list.sh
-   ```
-
-   This lists the pipeline loaded in DL Streamer Pipeline Server.
-
-   Example Output:
-
-   ```bash
-   # Example output for Worker Safety gear detection
-   Environment variables loaded from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/.env
-   Running sample app: worker-safety-gear-detection
-   Checking status of dlstreamer-pipeline-server...
-   Server reachable. HTTP Status Code: 200
-   Loaded pipelines:
-   [
-       ...
-       {
-           "description": "DL Streamer Pipeline Server pipeline",
-           "name": "user_defined_pipelines",
-           "parameters": {
-           "properties": {
-               "detection-properties": {
-                   "element": {
-                       "format": "element-properties",
-                       "name": "detection"
-                   }
-               }
-           },
-           "type": "object"
-           },
-           "type": "GStreamer",
-           "version": "worker_safety_gear_detection"
-       }
-       ...
-   ]
-   ```
-
-
-3. Start the sample application with a pipeline.
-   ```bash
-   ./sample_start.sh -p worker_safety_gear_detection
-   ```
-
-   To run the webcam pipeline instead:
-   ```bash
-   ./sample_start.sh -p worker_safety_gear_detection_webcam
-   ```
-
-   To run the second webcam pipeline:
-   ```bash
-   ./sample_start.sh -p worker_safety_gear_detection_webcam_2
-   ```
-   Output:
-
-   ```text
-   # Example output for Worker Safety gear detection
-   Environment variables loaded from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/.env
-   Running sample app: worker-safety-gear-detection
-   Checking status of dlstreamer-pipeline-server...
-   Server reachable. HTTP Status Code: 200
-   Loading payload from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/apps/worker-safety-gear-detection/payload.json
-   Payload loaded successfully.
-   Starting pipeline: worker_safety_gear_detection
-   Launching pipeline: worker_safety_gear_detection
-   Extracting payload for pipeline: worker_safety_gear_detection
-   Found 1 payload(s) for pipeline: worker_safety_gear_detection
-   Payload for pipeline 'worker_safety_gear_detection' {"source":{"uri":"file:///home/pipeline-server/resources/videos/Safety_Full_Hat_and_Vest.avi","type":"uri"},"destination":{"frame":{"type":"webrtc","peer-id":"worker_safety"}},"parameters":{"detection-properties":{"model":"/home/pipeline-server/resources/models/worker-safety-gear-detection/deployment/Detection/model/model.xml","device":"CPU"}}}
-   Posting payload to REST server at https://<HOST_IP>/api/pipelines/user_defined_pipelines/worker_safety_gear_detection
-   Payload for pipeline 'worker_safety_gear_detection' posted successfully. Response: "784b87b45d1511f08ab0da88aa49c01e"
-   ```
-
-   NOTE: This will start the pipeline. The inference stream can be viewed on WebRTC, in a browser, at the following url:
-
-
-   ```sh
-   https://localhost/mediamtx/worker_safety/
-   ```
-
-   Webcam output is published at:
-
-   ```sh
-   https://localhost/mediamtx/worker_safety_webcam/
-   ```
-
-   Second webcam output is published at:
-
-   ```sh
-   https://localhost/mediamtx/worker_safety_webcam_2/
-   ```
-
-   ThingsBoard-enabled webcam streams are published at:
-
-   ```sh
-   https://localhost/mediamtx/worker_safety_webcam_tb/
-   https://localhost/mediamtx/worker_safety_webcam_2_tb/
-   ```
-
-4. Get the status of running pipeline instance(s).
-
-   ```bash
-   ./sample_status.sh
-   ```
-
-   This command lists the statuses of pipeline instances launched during the lifetime of sample application.
-
-   Output:
-
-   ```text
-   # Example output for Worker Safety gear detection
-   Environment variables loaded from [WORKDIR]/manufacturing-ai-suite/industrial-edge-insights-vision/.env
-   Running sample app: worker-safety-gear-detection
-   [
+   Add the minimal server attributes:
+   ```json
    {
-       "avg_fps": 30.036955894826452,
-       "elapsed_time": 3.096184492111206,
-       "id": "784b87b45d1511f08ab0da88aa49c01e",
-       "message": "",
-       "start_time": 1752100724.3075056,
-       "state": "RUNNING"
+     "nvrEnabled": true,
+     "sourceUri": "rtsp://mediamtx-server:8554/cam1"
    }
-   ]
    ```
 
-5. Stop pipeline instances.
+3. Watch the sync service onboard the device automatically.
 
    ```bash
-   ./sample_stop.sh
+   docker compose logs -f klyff-bridge
    ```
-6. Stop the Docker application.
+
+   Successful onboarding looks like:
+   - `mqtt_topics_reconciled`
+   - `pipeline_started`
+   - `reconcile_completed`
+   - `telemetry_forwarded`
+
+4. Open the processed stream in a browser.
+
+   For a device named `Safety_Cam1`, the derived peer id is `worker_safety_rtsp_safety_cam1`, so the view URL is:
+   ```sh
+   https://localhost/mediamtx/worker_safety_rtsp_safety_cam1/
+   ```
+
+5. Stop the Docker application.
 
    ```bash
    docker compose down -v

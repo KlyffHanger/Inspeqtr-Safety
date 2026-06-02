@@ -61,17 +61,15 @@
     kubectl logs -n apps -f <pod_name>
     ```
 
-6.  Copy the resources such as video and model from local directory to the to the `dlstreamer-pipeline-server` pod to make them available for application while launching pipelines.
+6.  Copy the model resources to the `dlstreamer-pipeline-server` pod so they are available for dynamic pipeline launches.
     ```sh
-    # Below is an example for Worker Safety Gear Detection. Please adjust the source path of models and videos appropriately for other sample applications.
+    # Below is an example for Worker Safety Gear Detection.
 
     POD_NAME=$(kubectl get pods -n apps -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep deployment-dlstreamer-pipeline-server | head -n 1)
 
-    kubectl cp resources/worker-safety-gear-detection/videos/Safety_Full_Hat_and_Vest.avi $POD_NAME:/home/pipeline-server/resources/videos/ -c dlstreamer-pipeline-server -n apps
-
     kubectl cp resources/worker-safety-gear-detection/models/* $POD_NAME:/home/pipeline-server/resources/models/ -c dlstreamer-pipeline-server -n apps
     ```
-7.  Fetch the list of pipeline loaded available to launch
+7.  Fetch the list of loaded pipelines
     ```sh
     ./sample_list.sh
     ```
@@ -107,32 +105,28 @@
         ...
     ]
     ```
-8.  Start the sample application with a pipeline.
+8.  Configure the first camera device in KLYFF.
     ```sh
-    ./sample_start.sh -p worker_safety_gear_detection
+    {
+      "nvrEnabled": true,
+      "sourceUri": "rtsp://mediamtx-server:8554/cam1"
+    }
     ```
-    This command would look for the payload for the pipeline specified in `-p` argument above, inside the `payload.json` file and launch the a pipeline instance in DLStreamer Pipeline Server. Refer to the table, to learn about different options available.
+    Add those as server-side attributes on a KLYFF device such as `Safety_Cam1`.
 
-    Output:
+9.  Watch the sync service discover the device and start the pipeline automatically.
     ```sh
-    # Example output for Worker Safety Gear Detection
-    Environment variables loaded from /home/intel/OEP/edge-ai-suites/manufacturing-ai-suite/industrial-edge-insights-vision/.env
-    Running sample app: worker-safety-gear-detection
-    Checking status of dlstreamer-pipeline-server...
-    Server reachable. HTTP Status Code: 200
-    Loading payload from /home/intel/OEP/edge-ai-suites/manufacturing-ai-suite/industrial-edge-insights-vision/helm/apps/worker-safety-gear-detection/payload.json
-    Payload loaded successfully.
-    Starting pipeline: worker_safety_gear_detection
-    Launching pipeline: worker_safety_gear_detection
-    Extracting payload for pipeline: worker_safety_gear_detection
-    Found 1 payload(s) for pipeline: worker_safety_gear_detection
-    Payload for pipeline 'worker_safety_gear_detection' {"source":{"uri":"file:///home/pipeline-server/resources/videos/Safety_Full_Hat_and_Vest.avi","type":"uri"},"destination":{"frame":{"type":"webrtc","peer-id":"worker_safety"}},"parameters":{"detection-properties":{"model":"/home/pipeline-server/resources/models/models/worker-safety-gear-detection/model.xml","device":"CPU"}}}
-    Posting payload to REST server at http://<HOST_IP>:30107/pipelines/user_defined_pipelines/worker_safety_gear_detection
-    Payload for pipeline 'worker_safety_gear_detection' posted successfully. Response: "99ac50d852b511f09f7c2242868ff651"
+    kubectl logs -n apps -f <klyff-bridge-pod-name>
     ```
-    >NOTE- This would start the pipeline. You can view the inference stream on WebRTC by opening a browser and navigating to http://<HOST_IP>:31111/worker_safety/ for Worker Safety Gear Detection.
+    Successful onboarding looks like:
+    - `mqtt_topics_reconciled`
+    - `pipeline_started`
+    - `reconcile_completed`
+    - `telemetry_forwarded`
 
-9.  Get status of pipeline instance(s) running.
+    > NOTE: For a device named `Safety_Cam1`, the derived WebRTC path is typically `worker_safety_rtsp_safety_cam1`.
+
+10.  Get status of pipeline instance(s) running.
     ```sh
     ./sample_status.sh
     ```
@@ -155,7 +149,7 @@
     ]
     ```
 
-10. Stop pipeline instance.
+11. Stop pipeline instance.
     ```sh
     ./sample_stop.sh
     ```
@@ -184,7 +178,7 @@
     If you wish to stop a specific instance, you can provide it with an `--id` argument to the command.
     For example, `./sample_stop.sh --id 99ac50d852b511f09f7c2242868ff651`
 
-11. Uninstall the helm chart.
+12. Uninstall the helm chart.
      ```sh
      helm uninstall app-deploy -n apps
      ```
