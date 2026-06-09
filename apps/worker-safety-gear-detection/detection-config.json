@@ -1,0 +1,4 @@
+{
+  "model": "/home/pipeline-server/resources/models/worker-safety-gear-detection/yolo11n.xml",
+  "model-proc": "/home/pipeline-server/resources/models/worker-safety-gear-detection/model_proc.json"
+}

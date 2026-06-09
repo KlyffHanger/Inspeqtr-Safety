@@ -1,2 +1,8 @@
 apps/*/configs/nginx/ssl/
 .env
+/docs
+__pycache__/
+*.py[cod]
+AGENTS.md
+apps/*/runtime/*
+!apps/*/runtime/.gitkeep

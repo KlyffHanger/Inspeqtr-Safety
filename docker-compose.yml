@@ -88,7 +88,6 @@ services:
     container_name: mediamtx-server
     environment:
       - MTX_LOGLEVEL=debug
-      - MTX_RTSP=no
       - MTX_RTMP=no
       - MTX_HLS=no
       - MTX_SRT=no
@@ -99,6 +98,123 @@ services:
       - MTX_WEBRTCLOCALTCPADDRESS=:8189
     networks:
     - mraas
+
+  webcam-rtsp-cam1:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    container_name: webcam-rtsp-cam1
+    depends_on:
+      - mediamtx
+    command:
+      - -hide_banner
+      - -loglevel
+      - warning
+      - -f
+      - v4l2
+      - -framerate
+      - "30"
+      - -video_size
+      - 160x120
+      - -i
+      - /dev/video4
+      - -an
+      - -vf
+      - format=yuv420p
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx-server:8554/cam1
+    devices:
+      - /dev/video4:/dev/video4
+    networks:
+      - mraas
+    restart: unless-stopped
+
+  webcam-rtsp-cam2:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    container_name: webcam-rtsp-cam2
+    depends_on:
+      - mediamtx
+    command:
+      - -hide_banner
+      - -loglevel
+      - warning
+      - -f
+      - v4l2
+      - -framerate
+      - "30"
+      - -video_size
+      - 320x240
+      - -i
+      - /dev/video0
+      - -an
+      - -vf
+      - format=yuv420p
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx-server:8554/cam2
+    devices:
+      - /dev/video0:/dev/video0
+    networks:
+      - mraas
+    restart: unless-stopped
+
+  webcam-rtsp-cam3:
+    image: jrottenberg/ffmpeg:6.1-ubuntu
+    container_name: webcam-rtsp-cam3
+    depends_on:
+      - mediamtx
+    command:
+      - -hide_banner
+      - -loglevel
+      - warning
+      - -f
+      - v4l2
+      - -framerate
+      - "30"
+      - -video_size
+      - 320x240
+      - -i
+      - /dev/video2
+      - -an
+      - -vf
+      - format=yuv420p
+      - -c:v
+      - libx264
+      - -preset
+      - ultrafast
+      - -tune
+      - zerolatency
+      - -pix_fmt
+      - yuv420p
+      - -f
+      - rtsp
+      - -rtsp_transport
+      - tcp
+      - rtsp://mediamtx-server:8554/cam3
+    devices:
+      - /dev/video2:/dev/video2
+    networks:
+      - mraas
+    restart: unless-stopped
 
   coturn:
     image: coturn/coturn:latest
@@ -115,6 +231,38 @@ services:
       - mraas
     volumes:
       - ./apps/${SAMPLE_APP}/configs/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  klyff-bridge:
+    build:
+      context: ./services/klyff-bridge
+    container_name: klyff-bridge
+    depends_on:
+      - mqtt-broker
+    env_file:
+      - ./.env
+    networks:
+      - mraas
+    volumes:
+      - ./apps/${SAMPLE_APP}/nvr-base-config.json:/config/nvr-base-config.json:ro
+      - ./apps/${SAMPLE_APP}/detection-config.json:/config/detection-config.json:ro
+      - ./apps/${SAMPLE_APP}/runtime:/runtime
+    environment:
+      LOCAL_MQTT_HOST: mqtt-broker
+      LOCAL_MQTT_PORT: 1883
+      LOCAL_MQTT_QOS: ${LOCAL_MQTT_QOS:-0}
+      KLYFF_API_BASE_URL: ${KLYFF_API_BASE_URL:-}
+      KLYFF_API_KEY: ${KLYFF_API_KEY:-}
+      KLYFF_USERNAME: ${KLYFF_USERNAME:-}
+      KLYFF_PASSWORD: ${KLYFF_PASSWORD:-}
+      KLYFF_DEVICE_TYPE_FILTER: ${KLYFF_DEVICE_TYPE_FILTER:-}
+      KLYFF_REQUIRE_NVR_ENABLED: ${KLYFF_REQUIRE_NVR_ENABLED:-true}
+      KLYFF_SYNC_POLL_SECONDS: ${KLYFF_SYNC_POLL_SECONDS:-15}
+      PIPELINE_SERVER_URL: ${PIPELINE_SERVER_URL:-http://dlstreamer-pipeline-server:8080}
+      PIPELINE_SERVER_API_PREFIX: ${PIPELINE_SERVER_API_PREFIX:-}
+      NVR_BASE_CONFIG_FILE: /config/nvr-base-config.json
+      DETECTION_CONFIG_FILE: /config/detection-config.json
+      PIPELINE_STATE_FILE: /runtime/klyff-device-sync-state.json
+    restart: unless-stopped
       
   nginx:
     image: nginx:1.27-alpine
@@ -274,4 +422,3 @@ volumes:
     driver: local
   prometheus_data:
     driver: local
-
