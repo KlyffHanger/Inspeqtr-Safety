@@ -16,6 +16,8 @@ from klyff_bridge.utils.data import coerce_bool, get_first, maybe_json_dict, saf
 class DeviceDiscoveryService:
     """Resolve desired runtime device configurations from KLYFF state."""
 
+    _VALID_OPERATOR_STATES = {"running", "stopped"}
+
     def __init__(
         self,
         settings: AppSettings,
@@ -135,6 +137,7 @@ class DeviceDiscoveryService:
                 attrs.get("useSharedPipeline", attrs.get("use_shared_pipeline", True)),
                 True,
             )
+            operator_desired_state = self._operator_desired_state(attrs)
 
             base_model_instance_id = str(
                 attrs.get("modelInstanceId")
@@ -203,12 +206,24 @@ class DeviceDiscoveryService:
                 source_type=str(source_type),
                 publish_frame=publish_frame,
                 default_device=str(candidate["default_device"]),
+                operator_desired_state=operator_desired_state,
                 detection_properties=detection_properties,
                 use_shared_pipeline=use_shared_pipeline,
                 config_hash=config_hash,
             )
 
         return desired
+
+    def _operator_desired_state(self, attrs: dict[str, Any]) -> str | None:
+        """Return the normalized operator-requested camera state, if configured."""
+        raw_value = attrs.get("operatorDesiredState", attrs.get("operator_desired_state"))
+        if not isinstance(raw_value, str):
+            return None
+
+        normalized = raw_value.strip().lower()
+        if normalized in self._VALID_OPERATOR_STATES:
+            return normalized
+        return None
 
     def build_pipeline_payload(
         self,

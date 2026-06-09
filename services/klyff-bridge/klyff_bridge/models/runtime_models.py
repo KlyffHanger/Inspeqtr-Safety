@@ -23,6 +23,7 @@ class DeviceRuntimeConfig(BaseModel):
     source_type: str
     publish_frame: bool
     default_device: str
+    operator_desired_state: str | None
     detection_properties: dict[str, Any]
     use_shared_pipeline: bool
     config_hash: str

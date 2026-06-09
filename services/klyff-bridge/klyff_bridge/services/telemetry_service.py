@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -13,7 +12,7 @@ import paho.mqtt.client as mqtt
 from klyff_bridge.clients.klyff_client import KlyffRestClient
 from klyff_bridge.config.settings import AppSettings
 from klyff_bridge.models.runtime_models import DeviceRuntimeConfig, ManagedState
-from klyff_bridge.utils.data import safe_float, slugify, trim_string
+from klyff_bridge.utils.data import safe_float, trim_string
 from klyff_bridge.utils.logging import structured_log
 
 
@@ -115,22 +114,13 @@ class TelemetryService:
         except json.JSONDecodeError:
             parsed = None
 
-        ts_ms = self._extract_timestamp_ms(parsed)
-        values = self._flatten_payload(parsed)
         prefix = self.settings.klyff_timeseries_key_prefix
-        values[f"{prefix}raw_payload"] = trim_string(payload, self.settings.klyff_telemetry_max_len)
-        values[f"{prefix}topic"] = topic
+        values = {
+            f"{prefix}raw_payload": trim_string(payload, self.settings.klyff_telemetry_max_len),
+        }
 
         try:
-            self.klyff_client.save_timeseries(device.device_id, values, ts_ms=ts_ms)
-            self.klyff_client.save_server_attributes(
-                device.device_id,
-                {
-                    "nvrLastTelemetryTs": int(time.time() * 1000),
-                    "nvrLastTelemetryTopic": topic,
-                    "nvrLastTelemetryStatus": "forwarded",
-                },
-            )
+            self.klyff_client.save_timeseries(device.device_id, values, ts_ms=None)
         except Exception as exc:  # noqa: BLE001
             structured_log(
                 self.logger,
@@ -161,20 +151,6 @@ class TelemetryService:
             total_fps=total_fps,
         )
 
-    def _extract_timestamp_ms(self, payload: Any) -> int | None:
-        if not isinstance(payload, dict):
-            return None
-        metadata = payload.get("metadata")
-        if not isinstance(metadata, dict):
-            return None
-        timestamp_ns = metadata.get("time")
-        if isinstance(timestamp_ns, int):
-            return int(timestamp_ns / 1_000_000)
-        timestamp = metadata.get("timestamp")
-        if isinstance(timestamp, int):
-            return timestamp
-        return None
-
     def _extract_avg_fps(self, payload: Any) -> float | None:
         if not isinstance(payload, dict):
             return None
@@ -188,51 +164,3 @@ class TelemetryService:
         if not isinstance(status, dict):
             return None
         return safe_float(status.get("avg_fps"))
-
-    def _flatten_payload(self, payload: Any) -> dict[str, Any]:
-        flattened: dict[str, Any] = {}
-
-        def visit(prefix: str, value: Any) -> None:
-            key_prefix = self.settings.klyff_timeseries_key_prefix
-            key = f"{key_prefix}{prefix}" if prefix else key_prefix.rstrip("_")
-            if isinstance(value, bool):
-                flattened[key] = value
-                return
-            if isinstance(value, (int, float, str)):
-                flattened[key] = value
-                return
-            if isinstance(value, dict):
-                for child_key, child_value in value.items():
-                    if not isinstance(child_key, str):
-                        continue
-                    next_prefix = f"{prefix}_{slugify(child_key)}" if prefix else slugify(child_key)
-                    visit(next_prefix, child_value)
-                return
-            if isinstance(value, list):
-                flattened[f"{key}_count"] = len(value)
-                label_counts: dict[str, int] = {}
-                for item in value:
-                    if not isinstance(item, dict):
-                        continue
-                    label = item.get("label") or item.get("class") or item.get("type")
-                    if isinstance(label, str) and label:
-                        label_key = slugify(label)
-                        label_counts[label_key] = label_counts.get(label_key, 0) + 1
-                for label_key, count in label_counts.items():
-                    flattened[f"{key}_{label_key}_count"] = count
-                return
-            if value is not None:
-                flattened[key] = trim_string(
-                    json.dumps(value),
-                    self.settings.klyff_telemetry_max_len,
-                )
-
-        if isinstance(payload, dict):
-            visit("", payload)
-        else:
-            flattened[f"{self.settings.klyff_timeseries_key_prefix}payload_text"] = trim_string(
-                str(payload),
-                self.settings.klyff_telemetry_max_len,
-            )
-
-        return flattened

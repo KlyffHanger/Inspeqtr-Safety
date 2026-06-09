@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import signal
 import threading
-import time
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -18,7 +17,7 @@ from klyff_bridge.services.discovery_service import DeviceDiscoveryService
 from klyff_bridge.services.reconciler import ReconciliationService
 from klyff_bridge.services.telemetry_service import TelemetryService
 from klyff_bridge.stores.state_store import PipelineStateStore
-from klyff_bridge.utils.data import load_json, trim_string
+from klyff_bridge.utils.data import load_json
 from klyff_bridge.utils.logging import configure_logging, structured_log
 
 
@@ -124,32 +123,7 @@ class NvrOrchestrationService:
         message: str,
         state: ManagedState | None,
     ) -> None:
-        attrs = {
-            "nvrManaged": status not in {"removed", "disabled"},
-            "nvrSyncStatus": status,
-            "nvrSyncMessage": trim_string(message, 512),
-            "nvrLastSyncTs": int(time.time() * 1000),
-        }
-        if state and state.instance_id:
-            attrs["nvrPipelineInstanceId"] = state.instance_id
-        if state and state.metadata_topic:
-            attrs["nvrMetadataTopic"] = state.metadata_topic
-        if state and state.pipeline:
-            attrs["nvrPipelineName"] = state.pipeline
-        if state and state.peer_id:
-            attrs["nvrPeerId"] = state.peer_id
-        if state and state.source_uri:
-            attrs["nvrSourceUri"] = state.source_uri
-        try:
-            self.klyff_client.save_server_attributes(device_id, attrs)
-        except Exception as exc:  # noqa: BLE001
-            self._log(
-                logging.WARNING,
-                "device_status_update_failed",
-                device_id=device_id,
-                status=status,
-                error=str(exc),
-            )
+        return
 
     def reconcile_once(self) -> None:
         """Reconcile desired KLYFF state with running DLStreamer pipelines."""

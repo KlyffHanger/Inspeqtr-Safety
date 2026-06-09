@@ -104,6 +104,19 @@ class ReconciliationService:
                 self.status_updater(device_id, "disabled", "Device is disabled in KLYFF", device_state)
                 continue
 
+            if device.operator_desired_state == "stopped":
+                device_state = self.stop_device_if_running(device_id, device_state, running_ids)
+                device_state.last_status = "stopped"
+                device_state.last_error = None
+                state[device_id] = device_state
+                self.status_updater(
+                    device_id,
+                    "stopped",
+                    "Feed is stopped by operator request",
+                    device_state,
+                )
+                continue
+
             if not device.config_hash:
                 device_state.last_status = "invalid"
                 device_state.last_error = "missing config hash"
